@@ -28,6 +28,9 @@ It finds the pin, then the pin's round head, its sides and the gap round it.
 - **The lens** (`src/engine/lens.ts`) is a macro lens's depth of field over the whole frame, with bloom for the glints.
 - **The sound** (`src/engine/sound.ts`) is synthesized: each pin that moves ticks as a small steel rod struck.
 
+The engine was written for the opening of [work.draindk.tech](https://work.draindk.tech), where the table is set into a
+plinth's top and the page's scroll runs the hours, and its comments still speak of that page.
+
 `src/stage.ts` sets the table in a polished ring in a dark room and gives it a camera and hands: on the table a pointer
 presses (a resting mouse is a fingertip held over the roofs, which the tall ones dip under); beside it, with the right
 button or with two fingers it turns the camera; the wheel or a pinch goes closer, towards the point under the pointer.
