@@ -1,0 +1,39 @@
+{
+  "name": "pintable",
+  "version": "1.0.0",
+  "description": "A city as a live table of steel pins: ray-traced in one shader, lit by the real sun at any hour, pressed by hand. three.js and GLSL.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Oliver Kure Olsen (https://work.draindk.tech)",
+  "repository": "github:Ollibolli8/pintable",
+  "keywords": [
+    "pin-art",
+    "heightfield",
+    "ray-marching",
+    "webgl",
+    "threejs",
+    "glsl",
+    "shader",
+    "city-model",
+    "copenhagen",
+    "sun-position"
+  ],
+  "main": "src/stage.ts",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "build": "esbuild demo/main.ts --bundle --minify --format=esm --target=es2022 --outdir=docs && cp demo/index.html demo/public/* docs/",
+    "dev": "npm run build && npx --yes serve docs",
+    "check": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "three": ">=0.180.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.4",
+    "esbuild": "^0.28.2",
+    "three": "^0.186.0",
+    "typescript": "^5.9.0"
+  }
+}

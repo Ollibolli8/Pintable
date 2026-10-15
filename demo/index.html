@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pintable · a city in steel pins</title>
+  <meta name="description" content="Copenhagen's inner harbour as a table of steel pins, lit by the sun as it stands over the city at any hour. Press the roofs, stir the harbour. three.js and GLSL.">
+  <meta name="theme-color" content="#030304">
+  <link rel="stylesheet" href="main.css">
+</head>
+<body>
+  <main class="ps" data-gl="loading">
+    <div class="ps-stage" tabindex="0" role="application" aria-label="The pin table. Arrow keys turn and tilt it; plus and minus go closer and further.">
+      <canvas></canvas>
+    </div>
+    <div class="ps-ring" aria-hidden="true"></div>
+    <picture>
+      <source media="(max-aspect-ratio: 10/11)" srcset="poster-tall.webp">
+      <img class="ps-poster" src="poster.webp" loading="lazy" alt="Copenhagen's inner harbour as a round table of steel pins in a polished ring, lit low by the sun.">
+    </picture>
+    <div class="ps-label" hidden aria-live="polite"></div>
+    <header class="ps-head">
+      <h1>Pintable</h1>
+      <p>Copenhagen's inner harbour as <span class="ps-count">823,592</span> steel pins, each raised to its roof and lit by the sun as it stands over the city at the hour you set. Press the roofs and they spring back; touch the harbour and the wave runs on down the canals.</p>
+    </header>
+    <p class="ps-read"></p>
+    <div class="ps-dials" role="group" aria-label="The city's light">
+      <div class="ps-row ps-day" role="radiogroup" aria-label="Day"><span class="ps-row-label">Day</span></div>
+      <div class="ps-row ps-sky" role="radiogroup" aria-label="Sky"><span class="ps-row-label">Sky</span></div>
+      <div class="ps-row">
+        <label class="ps-row-label" for="ps-places">Place</label>
+        <select id="ps-places" class="ps-places"><option value="">Whole table</option></select>
+        <button type="button" class="ps-chip ps-sound" aria-pressed="false">Sound off</button>
+      </div>
+      <p class="ps-hint"></p>
+    </div>
+    <p class="ps-foot">Buildings: Københavns Kommune, 3D city model (2013), CC BY. Water and landmarks © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>. Forecast: <a href="https://api.met.no/">MET Norway</a>, CC BY 4.0.<br><a href="https://github.com/Ollibolli8/pintable">Source</a> · <a href="https://work.draindk.tech/lab/pintable/">Oliver Kure Olsen</a></p>
+  </main>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
