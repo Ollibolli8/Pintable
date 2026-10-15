@@ -1,7 +1,13 @@
 /** The table's numbers and its named places, shared by the engine and the page (which keeps three.js out of its own bundle). */
 
-export const PINS_COUNT = 205892;
-/** m: the pins' disc in the plinth's 0.30 m top (512 pins across it, 1.113 mm a pin). */
+/**
+ * The table's pins: 1.25 m of the city a pin, 1,024 across the disc (city-fine.png), or with
+ * `?pins=coarse` the first table's 2.5 m, 512 across (city.png), to compare the two. The places and the boats are in
+ * 2.5 m units either way.
+ */
+export const PINS_FINE = typeof location === "undefined" || new URLSearchParams(location.search).get("pins") !== "coarse";
+export const PINS_COUNT = PINS_FINE ? 823592 : 205892;
+/** m: the pins' disc in the plinth's 0.30 m top (512 units across it, 1.113 mm a unit; a fine pin is half that). */
 export const PINS_RADIUS = 0.285;
 /** The hero camera's bearing round its target in the studio (degrees); the table turns to meet it. */
 export const CITY_AZ = 16;

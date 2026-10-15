@@ -41,7 +41,7 @@ button or with two fingers it turns the camera; the wheel or a pinch goes closer
 import { createStage } from "./src/stage";
 
 const stage = createStage({
-  canvas, city: "city.png", marks: "landmarks.png",
+  canvas, city: "city-fine.png", marks: "landmarks-fine.png",
   phone: matchMedia("(max-width: 700px)").matches, pixelRatio: Math.min(devicePixelRatio, 2),
   still: matchMedia("(prefers-reduced-motion: reduce)").matches, at: new Date(),
   onReady() {}, onFail() {}, onNews(n) {}, onLabel(i, x, y) {},
@@ -56,11 +56,12 @@ targets; without them `createStage` throws and the demo shows its still.
 
 ## The data
 
-`demo/public/city.png` is the city, one pixel a pin, row 0 the north edge. R and G hold the tallest roof over the pin as
-a 16-bit number (R the high byte) in units of 128 m / 65535; B holds flags: 1 water, 2 on the table, and in its next
-three bits the pin's material (0 steel, 1 patinated copper, 2 dark copper, 3 gilt, 4 a tree, 5 lawn). `landmarks.png`
-holds, for each pin, the number of the landmark it belongs to (`src/engine/places.ts` names them). Read them as data,
-never colour-managed or filtered.
+`demo/public/city-fine.png` is the city, one pixel a pin (1,024 across, 1.25 m each), row 0 the north edge;
+`city.png` is the same city at 2.5 m a pin, 512 across, which the demo draws with `?pins=coarse`. R and G hold the
+tallest roof over the pin as a 16-bit number (R the high byte) in units of 128 m / 65535; B holds flags: 1 water, 2 on
+the table, and in its next three bits the pin's material (0 steel, 1 patinated copper, 2 dark copper, 3 gilt, 4 a tree,
+5 lawn). `landmarks-fine.png` (and `landmarks.png`) holds, for each pin, the number of the landmark it belongs to
+(`src/engine/places.ts` names them). Read them as data, never colour-managed or filtered.
 
 ## Licences
 
@@ -68,7 +69,7 @@ The code is MIT (`LICENSE`).
 
 The data is not the code's. The heights come from Københavns Kommune's 3D city model (2013), CC BY; the water, the
 materials and the landmarks' outlines from OpenStreetMap, © OpenStreetMap contributors, under the
-[Open Database License](https://opendatacommons.org/licenses/odbl/). `city.png` and `landmarks.png` are made from both
+[Open Database License](https://opendatacommons.org/licenses/odbl/). The four images are made from both
 and are available under the ODbL. Credit both wherever you show them. The forecast is MET Norway's
 ([api.met.no](https://api.met.no/), CC BY 4.0).
 

@@ -1,6 +1,6 @@
 import "./style.css";
 import { createStage, type News, type Region, type Stage } from "../src/stage";
-import { PINS_COUNT, PLACES } from "../src/engine/places";
+import { PINS_COUNT, PINS_FINE, PLACES } from "../src/engine/places";
 import { createPinSound, type PinSound } from "../src/engine/sound";
 import { clockAt, dayText, hhmm, lightText, moment, sunTimes } from "../src/clock";
 import { createDial } from "./dial";
@@ -105,7 +105,7 @@ const region = (w: number, h: number): Region => {
 const fail = () => { root.dataset.gl = "off"; };
 try {
   stage = createStage({
-    canvas, city: "city.png", marks: "landmarks.png", phone: matchMedia("(max-width: 700px)").matches,
+    canvas, city: PINS_FINE ? "city-fine.png" : "city.png", marks: PINS_FINE ? "landmarks-fine.png" : "landmarks.png", phone: matchMedia("(max-width: 700px)").matches,
     pixelRatio: Math.min(devicePixelRatio || 1, touch ? 1.5 : 2), still: reduced, at: new Date(), region,
     onReady: () => { root.dataset.gl = "on"; void document.fonts?.ready.then(() => stage?.refit()); },
     onFail: fail,

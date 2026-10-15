@@ -69,6 +69,7 @@ export function createStage(o: StageOptions) {
   scene.add(table.mesh);
   const camera = new THREE.PerspectiveCamera(phone ? 30 : 24, 1, 0.02, 20);
   const n = GRID.n, R = GRID.pocket, PIN = GRID.n / 512;  // (places and press sizes are in 512ths of the table)
+  const RES2 = table.res * table.res;                      // (the sound counts pins as the first table's, 2.5 m)
 
   // ------------------------------------------------------------------------------------------ the set
   // The look frame's table: a thin polished ring round the pins, a black anodised body under it, a stem into the dark.
@@ -323,7 +324,7 @@ export function createStage(o: StageOptions) {
     nudged = pick;
     table.lift(pick, pick === null ? 0 : pick === chosen ? liftPins() : nudgePins());
     const m = pick === null ? null : table.landmark(pick);
-    if (m && sound?.on) sound.burst(Math.min(90, m.pins / (PIN * PIN * 6)), 0.7, 0);
+    if (m && sound?.on) sound.burst(Math.min(90, m.pins / (PIN * PIN * 6 * RES2)), 0.7, 0);
   }
   const lp = new THREE.Vector3();
   function placeLabel() {
@@ -368,7 +369,7 @@ export function createStage(o: StageOptions) {
     const risen = table.risen;
     if (sound?.on) {
       const pan = press ? (press.x / width) * 2 - 1 : hover ? (hover.x / width) * 2 - 1 : 0;
-      sound.feed(table.stir.pins + (Math.max(0, risen - risenWas) / Math.max(dt, 1 / 120)) * 0.02 / (PIN * PIN), table.stir.water, pan, dt);
+      sound.feed(table.stir.pins + (Math.max(0, risen - risenWas) / Math.max(dt, 1 / 120)) * 0.02 / (PIN * PIN * RES2), table.stir.water, pan, dt);
     }
     risenWas = risen;
     placeLabel();

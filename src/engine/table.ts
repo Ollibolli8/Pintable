@@ -1,22 +1,22 @@
 import * as THREE from "three";
 import { lightAt, type Light } from "./sky";
 import { loadWeather, weatherAt, type Weather } from "./weather";
-import { CITY_AZ, PINS_COUNT, PINS_RADIUS, PLACES } from "./places";
+import { CITY_AZ, PINS_COUNT, PINS_FINE, PINS_RADIUS, PLACES } from "./places";
 import { BOATS, BOAT_SIZE, placeBoats } from "./boats";
 import { warmUp } from "./warm";
 
 /**
- * The opening: Copenhagen's inner harbour as a table of steel pins set into the plinth's top, one pin for every 2.5 m
- * of the city (Københavns Kommune's 3D model, CC BY; the water from OpenStreetMap, ODbL), 205,892 of them, raised to
- * the buildings' heights at 1:2,246. The land's pins are satin, the water's polished. Lit by the sun as it stands over
- * Copenhagen at a moment (now, or as many hours on as the scroll has run), the moon after dark; pressed by the pointer
- * or a finger.
+ * The opening: Copenhagen's inner harbour as a table of steel pins set into the plinth's top, one pin for every 1.25 m
+ * of the city (Københavns Kommune's 3D model, CC BY; the water from OpenStreetMap, ODbL), 823,592 of them, raised to
+ * the buildings' heights at 1:2,246 (`?pins=coarse`: the first table, a pin for every 2.5 m, 205,892 of them). The
+ * land's pins are satin, the water's polished. Lit by the sun as it stands over Copenhagen at a moment (now, or as
+ * many hours on as the scroll has run), the moon after dark; pressed by the pointer or a finger.
  *
  * Nothing is a mesh of pins. One shader traces a ray per pixel through the heights (case-production/opening/heights.py
- * makes them: public/opening/city.png), stepping over whole blocks of the city at once: each texel of the tracing
+ * makes them: public/opening/city-fine.png), stepping over whole blocks of the city at once: each texel of the tracing
  * texture holds its pin's height and the tallest pin of its 4, 16 and 64 block, so the ray drops a level only where it
  * could hit something. The light's shadows come from a second texture, the height above which each pin sees the light,
- * built in ten doubling passes along the light. A press runs a small simulation on the GPU: each land pin springs back
+ * built in eleven doubling passes along the light. A press runs a small simulation on the GPU: each land pin springs back
  * to its height and pulls at its neighbours, so a dent rings out across the roofs; the harbour's pins carry a wave,
  * held in by the quays, so a touch on the water runs on down the canals. The water traces a second ray, so the
  * harbour mirrors the palace (desktop). Boats go round the canals and up and down the harbour, raised out of the
@@ -25,30 +25,38 @@ import { warmUp } from "./warm";
  * and the landmarks floodlit from below (each named building's pins, from OpenStreetMap: public/opening/landmarks.png).
  * A landmark whose name is pointed at or clicked stands up out of the table, all its pins together.
  *
- * Grid space: one unit a pin, x east, z south (row 0 is the north edge), y up from the plinth's top. The table turns
- * so the hero's camera looks across the harbour from the north-east at Slotsholmen, as in the look frame chosen for it.
+ * Grid space: one unit 2.5 m of the city (the first table's pin; the fine table has two pins a unit each way), x east,
+ * z south (row 0 is the north edge), y up from the plinth's top; the places and the boats
+ * are all in it. The textures have RES texels a unit (one a pin). The table turns so the hero's camera looks across the
+ * harbour from the north-east at Slotsholmen, as in the look frame chosen for it.
  */
-const N = 512;
-const PITCH = PINS_RADIUS / (N / 2);                       // m a pin: 1.113 mm
-const WELL = N / 2 + 1.5;                                  // the pocket's radius, pins (a 1.7 mm gap round the pins)
-const FLOOR = -6;                                          // the pocket's floor, pins
-const TOP = 58;                                            // the tracing volume's top, pins (the tower is 37.4)
-const CITY_M = 2.5;                                        // city metres a pin
-const WATER = -1;                                          // the harbour sits one pin below the quays
+const N = 512;                                             // units across the table
+const PITCH = PINS_RADIUS / (N / 2);                       // m a unit: 1.113 mm
+const WELL = N / 2 + 1.5;                                  // the pocket's radius, units (a 1.7 mm gap round the pins)
+const FLOOR = -6;                                          // the pocket's floor, units
+const TOP = 58;                                            // the tracing volume's top, units (the tower is 38.7)
+const CITY_M = 2.5;                                        // city metres a unit
+const WATER = -1;                                          // the harbour sits 2.5 m below the quays
 export const RISE = 4.0;                                   // the arrival: seconds of the rise, the last pin settled
 /** The grid (pins across), a pin in city metres and in metres, and the pocket's radius (m): for the page round the table. */
 export const GRID = { n: N, cityM: CITY_M, pitch: PITCH, pocket: WELL * PITCH };
 const SLOW = 3.0;                                          // shown in slow motion: real seconds to one of the rise (12 s)
-const BOAT_DIP = 0.35;                                     // how far a hull holds the water under it down, pins
+const BOAT_DIP = 0.35;                                     // how far a hull holds the water under it down, units
+// The tracer's steps a ray: enough to cross the table at the hero's low angles (`?pins-debug=6` shows rays out of steps
+// in red). The fine table's blocks are half as wide, so a ray takes more of them.
+const STEPS_AT = (phone: boolean, res: number) => Math.round((phone ? 88 : 132) * (res > 1 ? 1.4 : 1));
 
 
 const PASS_VERT = /* glsl */ `void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+// A texel's middle in grid units (RES texels a unit, NT across: the materials' defines).
+const GRID_GLSL = /* glsl */ `
+vec2 mid(ivec2 c) { return (vec2(c) + 0.5) / RES; }`;
 
 // The boats (boats.ts): where a point of the water is under a hull. Each hull a long box drawn to a rounded point over
 // its front part, its cabin a step up from the deck between a short foredeck and a shorter stern. Returns how much of
 // the pin there the nearest hull covers (0 to 1; at the table's rim a hull sinks into it) and, through out, its height
 // over the water there, which boat it is, where the point is on it (along it, the bow ahead; across, port positive) and
-// how far outside the hull it is (pins; not an exact distance, enough for a pin's share and a glow).
+// how far outside the hull it is (units; not an exact distance, enough for a pin's share and a glow).
 const BOATS_GLSL = /* glsl */ `
 #define BOATS ${BOATS}
 uniform vec4 uBoat[BOATS]; uniform vec4 uBoatSize[BOATS]; uniform float uBoatOn;
@@ -79,6 +87,7 @@ float boatAt(vec2 q, out float top, out int which, out vec2 l, out float sd) {
 const COMPOSE = /* glsl */ `
 uniform highp sampler2D tRest; uniform highp sampler2D tSim;
 uniform float uTime; uniform float uSink; uniform float uFloor; uniform float uBoatDip; uniform vec4 uLift;
+${GRID_GLSL}
 ${BOATS_GLSL}
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
@@ -91,14 +100,14 @@ void main() {
   // The spring: 13 rad/s, damping 0.32 (one bounce you see), 0.62 for the tallest.
   float Z = mix(0.32, 0.62, tall), W = 13.0, WD = W * sqrt(1.0 - Z * Z);
   float rise = tau <= 0.0 ? 0.0 : tau > 3.0 ? 1.0 : 1.0 - exp(-Z * W * tau) * (cos(WD * tau) + Z * W / WD * sin(WD * tau));
-  float u = length(vec2(c) + 0.5 - 256.0) / 256.0;
+  float u = length(mid(c) - 256.0) / 256.0;
   float sink = smoothstep(u, u + 0.4, uSink * 1.4);
   float rest = (r.r * rise + lift) * (1.0 - sink);
   float level = rest + texelFetch(tSim, c, 0).r, hull = 0.0;
   if (r.g > 1.5) {
     // (the simulation holds the water under a hull down by uBoatDip, so the deck stands its height over the water round it)
     float top, sd; int which; vec2 l;
-    float cov = boatAt(vec2(c) + 0.5, top, which, l, sd);
+    float cov = boatAt(mid(c), top, which, l, sd);
     hull = cov * (top + uBoatDip * cov);
   }
   gl_FragColor = vec4(level + hull, rest, level, 0.0);
@@ -119,32 +128,33 @@ void main() {
   gl_FragColor = vec4(texelFetch(tH, c, 0).r, texelFetch(t4, c / 4, 0).r, texelFetch(t16, c / 16, 0).r, texelFetch(t64, c / 64, 0).r);
 }`;
 // The height above which a pin sees the light: the highest of every pin towards the light, less the light's climb to
-// it. Each pass doubles how far it looks (1, 2, 4 ... 512 pins).
+// it. Each pass doubles how far it looks (1, 2, 4 ... 1024 texels).
 const SHADOW = /* glsl */ `
 uniform highp sampler2D tSrc; uniform vec2 uDir; uniform float uTan; uniform float uStep; uniform int uInit;
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
   ivec2 q = ivec2(floor(vec2(c) + 0.5 + uDir * uStep));
-  bool inside = all(greaterThanEqual(q, ivec2(0))) && all(lessThan(q, ivec2(512)));
-  // (the first pass reads the heights without the boats, the rest what it made)
+  bool inside = all(greaterThanEqual(q, ivec2(0))) && all(lessThan(q, ivec2(NT)));
+  // (the first pass reads the heights without the boats, the rest what it made; uStep is in texels)
   vec4 src = inside ? texelFetch(tSrc, q, 0) : vec4(0.0);
-  float far = inside ? (uInit == 1 ? src.b : src.r) - uTan * uStep : -1e4;
+  float far = inside ? (uInit == 1 ? src.b : src.r) - uTan * uStep / RES : -1e4;
   gl_FragColor = vec4(uInit == 1 ? far : max(texelFetch(tSrc, c, 0).r, far));
 }`;
 // The press: each land pin a damped spring to its height, pulling at its four neighbours (the ring that runs out), held
 // under the fingertip (a sphere's underside) while it is there. The harbour's pins are a wave instead: they barely
 // spring back, so a dent runs on as rings down the canals, and the quays hold it (water and land don't pull at each
 // other, so a ring meets a quay as a wall and comes back off it). A fingertip on the water presses a hollow into it,
-// and drawn across it, heaps the water up ahead of it (its bow wave, uHandV its speed in pins a second) and leaves a
-// wake: faster than the water's waves run (about 15 pins a second), the two fold back into a V. So does a boat: each
+// and drawn across it, heaps the water up ahead of it (its bow wave, uHandV its speed in units a second) and leaves a
+// wake: faster than the water's waves run (about 15 units a second), the two fold back into a V. So does a boat: each
 // hull holds the water under it down as it goes, and the water it pushes aside runs off as its bow wave and wake, down
 // the canal and back off the quays.
 const SIM = /* glsl */ `
 uniform highp sampler2D tSim; uniform highp sampler2D tH; uniform highp sampler2D tRest; uniform float uDt;
 uniform vec4 uHand; uniform vec2 uHandV; uniform float uHandOn; uniform float uDip; uniform vec4 uDrops[6]; uniform float uBoatDip;
+${GRID_GLSL}
 ${BOATS_GLSL}
 float nb(ivec2 q, float kind, float own) {
-  q = clamp(q, ivec2(0), ivec2(511));
+  q = clamp(q, ivec2(0), ivec2(NT - 1));
   return abs(texelFetch(tRest, q, 0).g - kind) < 0.5 ? texelFetch(tSim, q, 0).r : own;
 }
 void main() {
@@ -154,12 +164,13 @@ void main() {
   vec4 s = texelFetch(tSim, c, 0);
   float rest = texelFetch(tH, c, 0).g;
   float off = s.r, vel = s.g;
-  float lap = nb(c + ivec2(1, 0), kind, off) + nb(c - ivec2(1, 0), kind, off) + nb(c + ivec2(0, 1), kind, off) + nb(c - ivec2(0, 1), kind, off) - 4.0 * off;
+  // (the Laplacian a unit: RES^2 that of the texels, so the rings run as fast over the city on either table)
+  float lap = (nb(c + ivec2(1, 0), kind, off) + nb(c - ivec2(1, 0), kind, off) + nb(c + ivec2(0, 1), kind, off) + nb(c - ivec2(0, 1), kind, off) - 4.0 * off) * RES * RES;
   bool water = kind > 1.5;
   vel += (water ? -1.5 * off + 240.0 * lap - 0.45 * vel : -38.0 * off + 210.0 * lap - 2.6 * vel) * uDt;
   off += vel * uDt;
   if (uHandOn > 0.5) {
-    float r = distance(vec2(c) + 0.5, uHand.xy);
+    float r = distance(mid(c), uHand.xy);
     if (water) {
       float R = uHand.w * 0.55;
       if (r < R) {
@@ -168,7 +179,7 @@ void main() {
       }
       float sp = length(uHandV);
       if (sp > 0.5 && r < R * 1.9) {
-        float ahead = dot(vec2(c) + 0.5 - uHand.xy, uHandV) / (max(r, 0.5) * sp);
+        float ahead = dot(mid(c) - uHand.xy, uHandV) / (max(r, 0.5) * sp);
         vel += smoothstep(0.1, 0.9, ahead) * smoothstep(R * 0.6, R, r) * (1.0 - smoothstep(R * 1.25, R * 1.9, r)) * 1.3 * min(sp, 30.0) * uDt;
       }
     } else if (r < uHand.w) {
@@ -178,12 +189,12 @@ void main() {
   }
   // Rain on the harbour: each drop knocks a small dent into the water where it lands, and a ring runs out from it.
   if (water) for (int i = 0; i < 6; i++) {
-    float r = distance(vec2(c) + 0.5, uDrops[i].xy);
+    float r = distance(mid(c), uDrops[i].xy);
     if (r < 1.8) vel -= uDrops[i].z * (1.0 - r * r / 3.24);
   }
   if (water) {
     float top, sd; int which; vec2 l;
-    float cov = boatAt(vec2(c) + 0.5, top, which, l, sd);
+    float cov = boatAt(mid(c), top, which, l, sd);
     float hollow = -uBoatDip * cov;
     if (cov > 0.0 && off > hollow) { off = hollow; vel = min(vel, 0.0); }
   }
@@ -212,9 +223,10 @@ uniform float uRiseT; uniform float uSink; uniform sampler2D studioMap; uniform 
 uniform vec2 uSpin; uniform float uWind; uniform vec2 uWindDir; uniform float uWindT; uniform float uCloud; uniform vec2 uCloudAt; uniform float uWet;
 uniform float uFlood[${PLACES.length}]; uniform vec2 uPicked;
 varying vec3 vG;
+${GRID_GLSL}
 ${BOATS_GLSL}
 
-// Round pins, 0.93 of the pitch across, their heads domed a little and rounded at the rim.
+// Round pins, 0.93 of the pitch across, their heads domed a little and rounded at the rim (in pins: RES a unit).
 const float RAD = 0.465, CHAMFER = 0.1, DOME = 0.7;
 // The city's light after dark (linear): sodium-warm lamps, windows a little whiter, floodlights whiter still.
 const vec3 LAMP = vec3(1.0, 0.56, 0.24), WINDOW = vec3(1.0, 0.74, 0.46), FLOOD = vec3(1.0, 0.8, 0.56);
@@ -233,7 +245,7 @@ vec3 matTint(int mt) {
 }
 // Whether a pin still stands for the city at the end (1) or has sunk flush (0), as COMPOSE sinks it.
 float staying(ivec2 c) {
-  float u = length(vec2(c) + 0.5 - 256.0) / 256.0;
+  float u = length(mid(c) - 256.0) / 256.0;
   return 1.0 - smoothstep(0.6, 1.0, smoothstep(u, u + 0.4, uSink * 1.4));
 }
 // Whether a pin is the city's yet (1) or still the plinth's blank steel (0). Its part of the plan shows a moment before
@@ -244,7 +256,8 @@ int gIters = 0;
 float pick(vec4 m, int l) { return l == 0 ? m.r : l == 1 ? m.g : l == 2 ? m.b : m.a; }
 
 // Through the city from o (inside the volume) along d, at most tEnd: the first pin it meets. Coarse blocks first; a
-// level down only where the ray dips under a block's tallest pin, and straight down to that height when it does.
+// level down only where the ray dips under a block's tallest pin, and straight down to that height when it does. A
+// block is 1, 4, 16 or 64 texels across; cell is the texel hit.
 bool trace(vec3 o, vec3 d, float tEnd, int steps, out float tHit, out ivec2 cell, out int face) {
   tHit = 0.0; cell = ivec2(0); face = 0;
   vec2 dir = d.xz;
@@ -258,11 +271,12 @@ bool trace(vec3 o, vec3 d, float tEnd, int steps, out float tHit, out ivec2 cell
     gIters = i;
     if (t > tEnd) return false;
     vec3 p = o + d * t;
-    float s = float(1 << (2 * lvl));
+    int n = 1 << (2 * lvl);
+    float s = float(n) / RES;
     vec2 blk = floor(p.xz / s);
     vec2 at = blk * s;
     bool out_ = any(lessThan(at, vec2(0.0))) || any(greaterThanEqual(at, vec2(512.0)));
-    ivec2 tc = clamp(ivec2(at), ivec2(0), ivec2(511));
+    ivec2 tc = clamp(ivec2(blk) * n, ivec2(0), ivec2(NT - 1));
     float h = out_ ? uFloor : pick(texelFetch(tMax, tc, 0), lvl);
     vec2 tb = ((blk + ahead) * s - o.xz) * inv;
     float tEx = min(tb.x, tb.y);
@@ -288,7 +302,7 @@ bool trace(vec3 o, vec3 d, float tEnd, int steps, out float tHit, out ivec2 cell
   }
   // Out of steps (far off, at a grazing angle): down to the pin it is over, which a pixel that far can't tell apart.
   vec3 p = o + d * t;
-  cell = clamp(ivec2(floor(p.xz)), ivec2(0), ivec2(511));
+  cell = clamp(ivec2(floor(p.xz * RES)), ivec2(0), ivec2(NT - 1));
   float h = texelFetch(tMax, cell, 0).r;
   tHit = d.y < 0.0 && p.y > h ? t + (h - p.y) / d.y : t;
   face = 0;
@@ -354,8 +368,8 @@ vec3 steel(vec3 n, vec3 V, vec3 f0, float rough, float lit, vec3 envC, float bro
 float hash3(ivec2 c, int a) { return float(pcg(uint(c.x) * 1031u + pcg(uint(c.y) * 7u + pcg(uint(a)))) >> 8u) / 16777215.0; }
 
 // After dark the city lights up: lamps along the streets and quays, pins whose heads glow (each comes on at its own
-// moment through dusk), and windows along the facades, floor by floor (3 m, 1.2 pins), some of them lit. lamp is the
-// pin's lamp (0 none), h its height, many how many pins the pixel holds.
+// moment through dusk), and windows along the facades, floor by floor (3 m, 1.2 units), some of them lit. lamp is the
+// pin's lamp (0 none), h its height, fp the pins a pixel spans, many whether it holds several.
 // The streets themselves glow faintly, more in some quarters than others (a noise 30 m across), so from far off the
 // street plan draws itself in gold between the dark blocks.
 float vnoise(vec2 p) {
@@ -368,10 +382,11 @@ vec3 glow(ivec2 c, vec3 P, int face, float h, float fp, float many, float lamp, 
   if (uNight < 0.01 || mt == 4) return vec3(0.0);             // (no windows in the trees)
   if (face == 0) {
     vec3 e = vec3(0.0);
-    if (h > -0.5 && h < 0.3) e = LAMP * (0.55 * uNight * (0.25 + 0.75 * vnoise(vec2(c) / 12.0)) * (0.6 + 0.4 * hash3(c, 5)) * (mt == 5 ? 0.2 : 1.0));
+    if (h > -0.5 && h < 0.3) e = LAMP * (0.55 * uNight * (0.25 + 0.75 * vnoise(mid(c) / 12.0)) * (0.6 + 0.4 * hash3(c, 5)) * (mt == 5 ? 0.2 : 1.0));
     if (lamp <= 0.0 || hash3(c, 3) > uNight * 1.15 - 0.1) return e;
-    float rr = length(P.xz - (vec2(c) + 0.5));
-    return e + LAMP * (lamp * 16.0 * mix(1.0 - smoothstep(0.16, 0.4, rr), 0.3, many));
+    // (a lamp's light is its own, whatever the pin: a smaller head holds it brighter)
+    float rr = length(P.xz - mid(c)) * RES;
+    return e + LAMP * (lamp * 16.0 * LAMP_K * mix(1.0 - smoothstep(0.16, 0.4, rr), 0.3, many));
   }
   if (h < 2.5 || P.y < 1.1 || P.y > h - 0.7 || lamp < -0.5) return vec3(0.0);   // (a landmark is floodlit instead)
   float fl = floor(P.y / 1.2), v = fract(P.y / 1.2);
@@ -415,8 +430,8 @@ float flood(float id, vec3 P, int face, float h, float many) {
 // a point nearer the light clears it lower (the pins that shade it are that much further off), so a shadow's edge
 // runs across a pin's top where it falls, not pin by pin.
 float sunSeen(ivec2 c, vec3 P, float fp) {
-  float need = texelFetch(tShadow, c, 0).r + dot(P.xz - (vec2(c) + 0.5), uSunDir) * uTan;
-  float w = 0.015 + 0.5 * fp * uTan + 0.3 * uCloud * uCloud;
+  float need = texelFetch(tShadow, c, 0).r + dot(P.xz - mid(c), uSunDir) * uTan;
+  float w = 0.015 + 0.5 * fp / RES * uTan + 0.3 * uCloud * uCloud;
   return smoothstep(-w, w, P.y - need);
 }
 // The clouds' shadows: the forecast's cover as a field of soft cells 300-600 m across, cast from a layer over the
@@ -448,7 +463,7 @@ void main() {
   float tIn = max(max((-b - sq) / a, min(y0, y1)), 0.0), tOut = min((-b + sq) / a, max(y0, y1));
   if (tIn >= tOut) discard;
   vec3 p0 = o + d * tIn, V = -d;
-  gCity = staying(ivec2(256));                             // (the pocket's floor and wall: as the table's middle)
+  gCity = staying(ivec2(NT / 2));                          // (the pocket's floor and wall: as the table's middle)
   float t; ivec2 c; int face;
   vec3 col, P;
   bool hit = trace(p0, d, tOut - tIn, STEPS, t, c, face);
@@ -469,12 +484,12 @@ void main() {
     gCity = staying(c);
     // A pin a boat has raised out of the water is the boat's, not the harbour's.
     float bTop = 0.0, bSd = 1e4; int bI = -1; vec2 bL = vec2(0.0);
-    float bCov = water ? boatAt(vec2(c) + 0.5, bTop, bI, bL, bSd) : 0.0;
+    float bCov = water ? boatAt(mid(c), bTop, bI, bL, bSd) : 0.0;
     bool boat = bCov > 0.3;
     float m = smoothstep(-0.45, -0.1, uRiseT - rest.b) * gCity, wm = water && !boat ? m : 0.0;   // (a blank pin: land's steel, unlit)
     vec2 sgn = vec2(d.x >= 0.0 ? 1.0 : -1.0, d.z >= 0.0 ? 1.0 : -1.0);
     vec3 n = face == 0 ? vec3(0.0, 1.0, 0.0) : face == 1 ? vec3(-sgn.x, 0.0, 0.0) : vec3(0.0, 0.0, -sgn.y);
-    float fp = dist * uPix / max(abs(dot(n, V)), 0.2);       // pins a pixel spans here
+    float fp = dist * uPix / max(abs(dot(n, V)), 0.2) * RES; // pins a pixel spans here
     float many = smoothstep(0.4, 1.6, fp);                   // past ~1 pin a pixel, the pixel holds their average
     float gap, ao = 1.0;
     if (kind < 0.5) {
@@ -485,17 +500,17 @@ void main() {
       float tilt = mix(0.007, 0.012, wm);
       // The harbour's pins are lapped flat and tilted along a slow swell (three trains of it), so the water breaks the
       // sun into glints that run across it.
-      vec2 q = vec2(c), swell = vec2(0.0);
+      vec2 q = mid(c), swell = vec2(0.0);
       if (wm > 0.0) {
         // (the first train runs with the wind, and all three grow with it)
         float sea = 0.55 + 1.5 * uWind;
         swell += sea * 0.024 * uWindDir * cos(dot(q, uWindDir * 0.31) - uSwell * 1.1);
         swell += sea * 0.018 * vec2(-0.45, 0.89) * cos(dot(q, vec2(-0.45, 0.89) * 0.53) - uSwell * 1.6 + 1.7);
         swell += sea * 0.011 * vec2(0.95, -0.31) * cos(dot(q, vec2(0.95, -0.31) * 0.97) - uSwell * 2.3 + 4.1);
-        // The wave the hand set off (the simulation's offsets): each pin tilted along its slope.
-        float sl = texelFetch(tSim, max(c - ivec2(1, 0), ivec2(0)), 0).r, sr = texelFetch(tSim, min(c + ivec2(1, 0), ivec2(511)), 0).r;
-        float su = texelFetch(tSim, max(c - ivec2(0, 1), ivec2(0)), 0).r, sd = texelFetch(tSim, min(c + ivec2(0, 1), ivec2(511)), 0).r;
-        swell -= 0.5 * vec2(sr - sl, sd - su);
+        // The wave the hand set off (the simulation's offsets): each pin tilted along its slope (a unit's rise a unit).
+        float sl = texelFetch(tSim, max(c - ivec2(1, 0), ivec2(0)), 0).r, sr = texelFetch(tSim, min(c + ivec2(1, 0), ivec2(NT - 1)), 0).r;
+        float su = texelFetch(tSim, max(c - ivec2(0, 1), ivec2(0)), 0).r, sd = texelFetch(tSim, min(c + ivec2(0, 1), ivec2(NT - 1)), 0).r;
+        swell -= 0.5 * RES * vec2(sr - sl, sd - su);
         swell *= wm;
       }
       vec2 jitter = (rn.zw - 0.5) * 2.0 * tilt * (1.0 - many) + swell;
@@ -507,7 +522,7 @@ void main() {
       if (face == 0) {
         // A domed head: the normal leans out with the radius, harder over the rounded rim; between the heads, the
         // dark gaps down to the pins' feet. Far off, a pixel holds the average.
-        vec2 uv = P.xz - (vec2(c) + 0.5);
+        vec2 uv = (P.xz - mid(c)) * RES;                       // (in pins)
         float rr = length(uv);
         vec2 out2 = rr > 1e-4 ? uv / rr : vec2(0.0);
         float rim = clamp((rr - (RAD - CHAMFER)) / CHAMFER, 0.0, 1.0) * clamp(CHAMFER / fp - 0.4, 0.0, 1.0);
@@ -515,26 +530,26 @@ void main() {
         n = normalize(vec3(out2.x * sin(lean) + jitter.x, cos(lean), out2.y * sin(lean) + jitter.y));
         gap = mix(smoothstep(RAD - 0.5 * fp, RAD + 0.5 * fp, rr), 1.0 - PI * RAD * RAD, many);
         gap *= 0.45 + 0.55 * clamp(V.y * 1.6, 0.0, 1.0);      // at a low angle the heads hide the gaps between them
-        // The sky a pin sees past its neighbours: lower in a courtyard or a narrow street.
+        // The sky a pin sees past its neighbours (6 m and 15 m off): lower in a courtyard or a narrow street.
         float occ = 0.0;
         for (int k = 0; k < 8; k++) {
           float ang = float(k) * 0.7854 + rn.x;
           float r = k < 4 ? 2.5 : 6.0;
-          ivec2 q = clamp(c + ivec2(round(vec2(cos(ang), sin(ang)) * r)), ivec2(0), ivec2(511));
+          ivec2 q = clamp(c + ivec2(round(vec2(cos(ang), sin(ang)) * r * RES)), ivec2(0), ivec2(NT - 1));
           occ += clamp((texelFetch(tMax, q, 0).r - h) / (r * 1.6), 0.0, 1.0);
         }
         ao = 1.0 - 0.55 * occ / 8.0;
       } else {
         // A pin's side: a rod, its normal turning across it; rounded into the head at the top.
-        float along = (face == 1 ? P.z : P.x) - ((face == 1 ? float(c.y) : float(c.x)) + 0.5);
-        float down = h - P.y;
+        float along = ((face == 1 ? P.z : P.x) - (face == 1 ? mid(c).y : mid(c).x)) * RES;   // (in pins)
+        float down = (h - P.y) * RES;
         float a = asin(clamp(along / RAD, -1.0, 1.0)) * (1.0 - many);
         n = n * cos(a) + (face == 1 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)) * sin(a);
         float band = (1.0 - clamp(down / CHAMFER, 0.0, 1.0)) * clamp(CHAMFER / fp - 0.4, 0.0, 1.0);
         n = normalize(n + vec3(0.0, band * 1.2, 0.0));
         gap = mix(smoothstep(RAD - 0.5 * fp, RAD + 0.5 * fp, abs(along)), 1.0 - 2.0 * RAD, many);
         // Darker towards a facade's foot, where the street in front of it meets it.
-        ivec2 front = clamp(c - ivec2(face == 1 ? int(sgn.x) : 0, face == 2 ? int(sgn.y) : 0), ivec2(0), ivec2(511));
+        ivec2 front = clamp(c - ivec2(face == 1 ? int(sgn.x) : 0, face == 2 ? int(sgn.y) : 0), ivec2(0), ivec2(NT - 1));
         float ground = texelFetch(tMax, front, 0).r;
         ao = 0.28 + 0.72 * (1.0 - exp(-max(P.y - ground, 0.0) / 4.5));
       }
@@ -560,7 +575,7 @@ void main() {
         vec3 ro = P + vec3(0.0, 0.01, 0.0);
         float tr; ivec2 cr; int fr;
         vec4 rr4 = vec4(0.0);
-        if (trace(ro, R, exitT(ro, R), 56, tr, cr, fr)) rr4 = texelFetch(tRest, cr, 0);
+        if (trace(ro, R, exitT(ro, R), REFLECT_STEPS, tr, cr, fr)) rr4 = texelFetch(tRest, cr, 0);
         if (rr4.g > 0.5) {
           vec3 Pr = ro + R * tr;
           vec2 sr = vec2(R.x >= 0.0 ? 1.0 : -1.0, R.z >= 0.0 ? 1.0 : -1.0);
@@ -654,19 +669,23 @@ const DEBUG = typeof location !== "undefined" ? Number(new URLSearchParams(locat
 export function createPinTable(o: {
   renderer: THREE.WebGLRenderer; top: number; phone: boolean;
   invalidate: () => void; onFail: (e?: unknown) => void; at?: Date | null;
-  /** The data: the heights (city.png) and the landmarks' outlines (landmarks.png). */
+  /** The data: the heights (city-fine.png, or city.png for the coarse table) and the landmarks' outlines (landmarks-fine.png, landmarks.png). */
   city: string; marks: string;
 }) {
   const { renderer } = o;
   const ext = renderer.extensions;
   if (!ext.has("EXT_color_buffer_float") && !ext.has("EXT_color_buffer_half_float")) return null;
+  // The pins: two a unit each way (1.25 m), or one (2.5 m, `?pins=coarse`). NT texels across.
+  const RES = PINS_FINE ? 2 : 1, NT = N * RES;
+  /** The texel under a grid point (units, on the table). */
+  const texel = (x: number, z: number) => Math.floor(z * RES) * NT + Math.floor(x * RES);
 
   // ------------------------------------------------------------------------------------------ the city's heights
-  const rest = new Float32Array(N * N * 4);
-  const restTex = new THREE.DataTexture(rest, N, N, THREE.RGBAFormat, THREE.FloatType);
+  const rest = new Float32Array(NT * NT * 4);
+  const restTex = new THREE.DataTexture(rest, NT, NT, THREE.RGBAFormat, THREE.FloatType);
   restTex.minFilter = restTex.magFilter = THREE.NearestFilter;
-  const heights = new Float32Array(N * N);                 // for the pointer: the city as it stands (no press)
-  let tower = { col: 200, row: 213, h: 37.4 };             // replaced by the data's own tallest pin
+  const heights = new Float32Array(NT * NT);               // for the pointer: the city as it stands (no press)
+  let tower = { col: 200.5, row: 213.5, h: 37.4 };         // replaced by the data's own tallest pin (units)
   let loaded = false, failed = false, alive = true;
   // The arrival's clock (seconds of the rise, which runs slowed: SLOW real seconds to one), -1 until it starts; rush()
   // speeds it up when the visitor scrolls before it is over.
@@ -688,14 +707,14 @@ export function createPinTable(o: {
     if (!res.ok) throw new Error(`city: ${res.status}`);
     const bmp = await createImageBitmap(await res.blob(), { colorSpaceConversion: "none", premultiplyAlpha: "none" });
     const cv = document.createElement("canvas");
-    cv.width = cv.height = N;
+    cv.width = cv.height = NT;
     const g = cv.getContext("2d", { willReadFrequently: true })!;
     g.drawImage(bmp, 0, 0);
     bmp.close();
-    const px = g.getImageData(0, 0, N, N).data;
+    const px = g.getImageData(0, 0, NT, NT).data;
     let pins = 0, best = -1, bestAt = 0;
     const wet: number[] = [];
-    for (let i = 0; i < N * N; i++) {
+    for (let i = 0; i < NT * NT; i++) {
       const flags = px[i * 4 + 2];
       if (flags & 2) {
         pins++;
@@ -714,14 +733,14 @@ export function createPinTable(o: {
     }
     // A colour-managed decode would shift the bytes: then the counts are off, and the hero stays as it was.
     if (pins !== PINS_COUNT || best < 30 || best > 45) throw new Error(`city: ${pins} pins, tallest ${best.toFixed(1)}`);
-    tower = { col: bestAt % N, row: Math.floor(bestAt / N), h: best };
+    tower = { col: (bestAt % NT + 0.5) / RES, row: (Math.floor(bestAt / NT) + 0.5) / RES, h: best };
     // The wave runs out from the tower after a moment of the bare table: 2 s of the rise to the far edge, each pin a
     // little early or late.
     const delays: number[] = [];
     let seed = 7;
     const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-    for (let i = 0; i < N * N; i++) {
-      const col = i % N, row = Math.floor(i / N);
+    for (let i = 0; i < NT * NT; i++) {
+      const col = (i % NT + 0.5) / RES, row = (Math.floor(i / NT) + 0.5) / RES;
       const r = Math.hypot(col - tower.col, row - tower.row);
       const delay = 0.6 + r * 0.0062 + (rand() - 0.5) * 0.09;
       rest[i * 4 + 2] = delay;
@@ -732,24 +751,24 @@ export function createPinTable(o: {
     lamps(rand);
     const mb = await marksBmp;
     if (mb) {
-      g.clearRect(0, 0, N, N);
+      g.clearRect(0, 0, NT, NT);
       g.drawImage(mb, 0, 0);
       mb.close();
-      const mp = g.getImageData(0, 0, N, N).data;
+      const mp = g.getImageData(0, 0, NT, NT).data;
       const sum = PLACES.map(() => [0, 0, 0, -1e9]);           // pins, x, z, tallest
-      for (let i = 0; i < N * N; i++) {
+      for (let i = 0; i < NT * NT; i++) {
         const kind = rest[i * 4 + 1];
         let id = mp[i * 4];
         if (id > 100) id = 0;
         if (!id || id > PLACES.length || kind < 0.5 || kind > 1.5) continue;     // (land only)
         rest[i * 4 + 3] = -id;
         const s = sum[id - 1];
-        s[0]++; s[1] += i % N + 0.5; s[2] += Math.floor(i / N) + 0.5; s[3] = Math.max(s[3], rest[i * 4]);
+        s[0]++; s[1] += (i % NT + 0.5) / RES; s[2] += (Math.floor(i / NT) + 0.5) / RES; s[3] = Math.max(s[3], rest[i * 4]);
       }
       sum.forEach(([n, x, z, top], k) => { if (n) marks[k] = { x: x / n, z: z / n, top, reach: 0, pins: n }; });
-      for (let i = 0; i < N * N; i++) {
+      for (let i = 0; i < NT * NT; i++) {
         const m = rest[i * 4 + 3] < -0.5 ? marks[-rest[i * 4 + 3] - 1] : null;
-        if (m) m.reach = Math.max(m.reach, Math.hypot(i % N + 0.5 - m.x, Math.floor(i / N) + 0.5 - m.z));
+        if (m) m.reach = Math.max(m.reach, Math.hypot((i % NT + 0.5) / RES - m.x, (Math.floor(i / NT) + 0.5) / RES - m.z));
       }
     }
     restTex.needsUpdate = true;
@@ -760,49 +779,50 @@ export function createPinTable(o: {
   })().catch(e => { failed = true; o.onFail(e); o.invalidate(); });
 
   // ------------------------------------------------------------------------------------------ the lamps
-  // Where the city has its lamps after dark: along the streets, one pin in ten that stands at a facade's foot, and along
-  // the quays, one in seven at the water's edge (rest.a, 0 for none). Their light on the ground round them is the
-  // lamps blurred over 2.5 m (tLamp, filtered), as bright under a lamp as the lamp's own pin.
-  const lampPx = new Uint8Array(N * N);
-  const lampTex = new THREE.DataTexture(lampPx, N, N, THREE.RedFormat, THREE.UnsignedByteType);
+  // Where the city has its lamps after dark: along the streets, a lamp every 25 m or so at a facade's foot, and along
+  // the quays every 17 m at the water's edge (rest.a, 0 for none; on the fine table half as many of the pins there,
+  // which are twice as many a metre). Their light on the ground round them is the lamps blurred over 2.5 m (tLamp,
+  // filtered), as bright under a lamp as the lamp's own pin.
+  const lampPx = new Uint8Array(NT * NT);
+  const lampTex = new THREE.DataTexture(lampPx, NT, NT, THREE.RedFormat, THREE.UnsignedByteType);
   lampTex.minFilter = lampTex.magFilter = THREE.LinearFilter;
   function lamps(rand: () => number) {
     const near = (test: (i: number) => boolean) => {
-      const m = new Uint8Array(N * N), out = new Uint8Array(N * N);
-      for (let i = 0; i < N * N; i++) m[i] = test(i) ? 1 : 0;
-      for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+      const m = new Uint8Array(NT * NT), out = new Uint8Array(NT * NT);
+      for (let i = 0; i < NT * NT; i++) m[i] = test(i) ? 1 : 0;
+      for (let r = 0; r < NT; r++) for (let c = 0; c < NT; c++) {
         let v = 0;
         for (let dr = -1; dr <= 1 && !v; dr++) for (let dc = -1; dc <= 1 && !v; dc++) {
           const rr = r + dr, cc = c + dc;
-          if (rr >= 0 && cc >= 0 && rr < N && cc < N) v = m[rr * N + cc];
+          if (rr >= 0 && cc >= 0 && rr < NT && cc < NT) v = m[rr * NT + cc];
         }
-        out[r * N + c] = v;
+        out[r * NT + c] = v;
       }
       return out;
     };
     const kind = (i: number) => rest[i * 4 + 1];
     const land = (i: number) => kind(i) > 0.5 && kind(i) < 1.5, tree = (i: number) => Math.abs(kind(i) - 1.32) < 0.02;
     const facade = near(i => land(i) && !tree(i) && rest[i * 4] > 2), quay = near(i => kind(i) === 2);
-    const lamp = new Float32Array(N * N);
-    for (let i = 0; i < N * N; i++) {
+    const lamp = new Float32Array(NT * NT);
+    for (let i = 0; i < NT * NT; i++) {
       rest[i * 4 + 3] = 0;
       if (!land(i) || rest[i * 4] > 0.4) continue;
-      const p = quay[i] ? 0.15 : facade[i] ? 0.1 : 0;
+      const p = (quay[i] ? 0.15 : facade[i] ? 0.1 : 0) / RES;
       if (p && rand() < p) rest[i * 4 + 3] = lamp[i] = 0.6 + 0.4 * rand();
     }
-    // A separable Gaussian, sigma one pin, then scaled so a lone lamp's peak is its own brightness.
-    const S = 1, R = 3, w: number[] = [];
+    // A separable Gaussian, sigma 2.5 m, then scaled so a lone lamp's peak is its own brightness.
+    const S = RES, R = 3 * RES, w: number[] = [];
     for (let k = -R; k <= R; k++) w.push(Math.exp(-(k * k) / (2 * S * S)));
-    const norm = 2 * Math.PI * S * S, tmp = new Float32Array(N * N);
-    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const norm = 2 * Math.PI, tmp = new Float32Array(NT * NT);
+    for (let r = 0; r < NT; r++) for (let c = 0; c < NT; c++) {
       let a = 0;
-      for (let k = -R; k <= R; k++) { const cc = c + k; if (cc >= 0 && cc < N) a += lamp[r * N + cc] * w[k + R]; }
-      tmp[r * N + c] = a;
+      for (let k = -R; k <= R; k++) { const cc = c + k; if (cc >= 0 && cc < NT) a += lamp[r * NT + cc] * w[k + R]; }
+      tmp[r * NT + c] = a;
     }
-    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    for (let r = 0; r < NT; r++) for (let c = 0; c < NT; c++) {
       let a = 0;
-      for (let k = -R; k <= R; k++) { const rr = r + k; if (rr >= 0 && rr < N) a += tmp[rr * N + c] * w[k + R]; }
-      lampPx[r * N + c] = Math.min(255, Math.round(a / norm * 2.5 * 255));
+      for (let k = -R; k <= R; k++) { const rr = r + k; if (rr >= 0 && rr < NT) a += tmp[rr * NT + c] * w[k + R]; }
+      lampPx[r * NT + c] = Math.min(255, Math.round(a / norm * 2.5 * 255));
     }
     lampTex.needsUpdate = true;
   }
@@ -814,10 +834,11 @@ export function createPinTable(o: {
   const quad = new THREE.Mesh(tri);
   quad.frustumCulled = false;
   passScene.add(quad);
+  const grid = { RES: RES.toFixed(1), NT: String(NT) };
   const pass = (frag: string, uniforms: Record<string, THREE.IUniform>) =>
-    new THREE.ShaderMaterial({ vertexShader: PASS_VERT, fragmentShader: frag, uniforms, depthTest: false, depthWrite: false });
-  const simA = target(N), simB = target(N), hRT = target(N), r4 = target(128), r16 = target(32), r64 = target(8);
-  const maxRT = target(N), shA = target(N), shB = target(N);
+    new THREE.ShaderMaterial({ vertexShader: PASS_VERT, fragmentShader: frag, uniforms, defines: grid, depthTest: false, depthWrite: false });
+  const simA = target(NT), simB = target(NT), hRT = target(NT), r4 = target(NT / 4), r16 = target(NT / 16), r64 = target(NT / 64);
+  const maxRT = target(NT), shA = target(NT), shB = target(NT);
   const sim = [simA, simB];
   // The boats as the heights and the tracer have them (where they are this frame), and as the simulation has them
   // (where they are at each of its steps).
@@ -906,7 +927,8 @@ export function createPinTable(o: {
   const material = new THREE.ShaderMaterial({
     vertexShader: TRACE_VERT, fragmentShader: TRACE_FRAG, uniforms: u, side: THREE.BackSide,
     defines: {
-      STEPS: o.phone ? 88 : 132, FLOOR_G: FLOOR.toFixed(1), ...(o.phone ? {} : { REFLECT: 1 }),
+      ...grid, STEPS: STEPS_AT(o.phone, RES), REFLECT_STEPS: 56 + 16 * (RES - 1), LAMP_K: (RES * RES).toFixed(1),
+      FLOOR_G: FLOOR.toFixed(1), ...(o.phone ? {} : { REFLECT: 1 }),
       ...(DEBUG ? { DEBUG } : {}),
       ENVMAP_TYPE_CUBE_UV: 1, CUBEUV_TEXEL_WIDTH: 1 / (3 * Math.max(2 ** maxMip, 7 * 16)), CUBEUV_TEXEL_HEIGHT: 1 / envH, CUBEUV_MAX_MIP: maxMip.toFixed(1),
     },
@@ -928,7 +950,7 @@ export function createPinTable(o: {
   // ------------------------------------------------------------------------------------------ the light
   // The light as it stands over Copenhagen at a moment (`hours` after now, or after `at`), turned to the model's grid
   // (UTM's grid north is 2.95° east of true north here). The scroll runs the hours, so the light is placed every frame
-  // it changes; the shadows follow it (eleven small passes) once the tallest shadow's tip would have moved 0.4 of a pin,
+  // it changes; the shadows follow it (a dozen small passes) once the tallest shadow's tip would have moved 0.4 of a pin,
   // which near noon is a frame in several and near sunset nearly every frame. Until then the shading reads the old
   // shadows with the sun they were cast by, so the two always agree.
   let light: Light = lightAt(o.at ?? new Date()), lightTime = o.at ?? new Date(), lightMs = 0, lightHours = NaN;
@@ -982,7 +1004,7 @@ export function createPinTable(o: {
     // Where a shadow's tip falls for each pin of height (the tallest pin's shadow is that times its height).
     const flat = Math.hypot(sunL.x, sunL.z), tan = Math.max(sunL.y / flat, 0.02);
     tip.set(sunL.x / flat / tan, sunL.z / flat / tan);
-    if (tip.distanceTo(tipCast) * tower.h > 0.4) shadowDirty = true;
+    if (tip.distanceTo(tipCast) * tower.h * RES > 0.4) shadowDirty = true;
   }
 
   // ------------------------------------------------------------------------------------------ the hand
@@ -1005,10 +1027,10 @@ export function createPinTable(o: {
     // From where the ray comes down through the volume's top, in steps of half a pin, to the first pin above it.
     let t = Math.max(0, (TOP - oG.y) / d.y);
     const end = (FLOOR - oG.y) / d.y, k = sinkNow;
-    for (; t < end; t += 0.5) {
+    for (; t < end; t += 0.5 / RES) {
       const x = oG.x + d.x * t, y = oG.y + d.y * t, z = oG.z + d.z * t;
       if (x < 0 || z < 0 || x >= N || z >= N) continue;
-      const h = heights[Math.floor(z) * N + Math.floor(x)];
+      const h = heights[texel(x, z)];
       if (h <= FLOOR) continue;
       if (y <= h * (1 - k)) return { x, z };
     }
@@ -1063,7 +1085,7 @@ export function createPinTable(o: {
         drops.forEach((d, j) => {
           if (j >= per || Math.random() > per - j) { d.z = 0; return; }
           const at = waterPins[Math.floor(Math.random() * waterPins.length)];
-          d.set(at % N + Math.random(), Math.floor(at / N) + Math.random(), 30 + 50 * Math.random(), 0);
+          d.set((at % NT + Math.random()) / RES, (Math.floor(at / NT) + Math.random()) / RES, 30 + 50 * Math.random(), 0);
         });
         if (boats) { boatT += 1 / 120; setBoats(simMat.uniforms.uBoat.value as THREE.Vector4[], boatT); }
         run(simMat, sim[1 - simIdx]);
@@ -1126,7 +1148,7 @@ export function createPinTable(o: {
       run(shadowMat, shA);
       let src = shA, dst = shB;
       shadowMat.uniforms.uInit.value = 0;
-      for (let s = 1; s <= 256; s *= 2) {
+      for (let s = 1; s < NT; s *= 2) {
         shadowMat.uniforms.tSrc.value = src.texture;
         shadowMat.uniforms.uStep.value = s;
         run(shadowMat, dst);
@@ -1174,6 +1196,8 @@ export function createPinTable(o: {
     },
     /** Where landmark i (its place in PLACES) stands, or null: its middle in the grid, its tallest pin, its reach. */
     landmark(i: number) { return marks[i] ?? null; },
+    /** Pins a unit each way (2 on the fine table): the scene's sounds count the first table's pins. */
+    get res() { return RES; },
     /** The landmark (its place in PLACES) under the pointer, or null. */
     get under() { return under; },
     /**
@@ -1214,8 +1238,7 @@ export function createPinTable(o: {
     },
     /** The city's height at a pin as it stands (no press), in pins. */
     heightAt(x: number, z: number) {
-      const c = Math.floor(x), r = Math.floor(z);
-      return c < 0 || r < 0 || c >= N || r >= N ? FLOOR : stand(r * N + c) * (1 - sinkNow);
+      return x < 0 || z < 0 || x >= N || z >= N ? FLOOR : stand(texel(x, z)) * (1 - sinkNow);
     },
     /** Whether the straight line between two grid points passes over the roofs (a place's label isn't behind them). */
     clear(a: THREE.Vector3, b: THREE.Vector3) {
@@ -1223,7 +1246,7 @@ export function createPinTable(o: {
       for (let i = 2; i < n; i++) {
         const f = i / n, x = a.x + (b.x - a.x) * f, z = a.z + (b.z - a.z) * f;
         if (x < 0 || z < 0 || x >= N || z >= N) break;
-        if (stand(Math.floor(z) * N + Math.floor(x)) * (1 - sinkNow) > a.y + (b.y - a.y) * f) return false;
+        if (stand(texel(x, z)) * (1 - sinkNow) > a.y + (b.y - a.y) * f) return false;
       }
       return true;
     },
@@ -1276,7 +1299,7 @@ export function createPinTable(o: {
     pointer(ndc: THREE.Vector2 | null, camera: THREE.Camera, mode: "hover" | "press" | null) {
       const at = ndc && mode ? hit(ndc, camera) : null;
       const now = performance.now();
-      const id = at ? rest[(Math.floor(at.z) * N + Math.floor(at.x)) * 4 + 3] : 0;
+      const id = at ? rest[texel(at.x, at.z) * 4 + 3] : 0;
       // A mouse resting on a landmark doesn't push it down: the page lifts it and names it instead (under).
       under = at && id < -0.5 ? Math.round(-id) - 1 : null;
       if (!at || (under !== null && mode === "hover")) {
@@ -1287,7 +1310,7 @@ export function createPinTable(o: {
       hand.x = at.x; hand.z = at.z;
       hand.on = true;
       hand.depth = mode === "press" ? -0.6 : 6.5;
-      hand.wet = rest[(Math.floor(at.z) * N + Math.floor(at.x)) * 4 + 1] > 1.5;
+      hand.wet = rest[texel(at.x, at.z) * 4 + 1] > 1.5;
       if (hand.wet) hand.water = true;
       hand.radius = mode === "press" ? 15 : 10;
       hand.lastAt = now;
