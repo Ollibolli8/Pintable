@@ -1,2 +1,8 @@
 node_modules
 .DS_Store
+__pycache__/
+# the pipeline's intermediate files and the city's DXFs
+pipeline/data/pins-fine.npz
+pipeline/data/materials*.npz
+*.bin
+*.dxf

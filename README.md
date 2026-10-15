@@ -63,14 +63,32 @@ the table, and in its next three bits the pin's material (0 steel, 1 patinated c
 5 lawn). `landmarks-fine.png` (and `landmarks.png`) holds, for each pin, the number of the landmark it belongs to
 (`src/engine/places.ts` names them). Read them as data, never colour-managed or filtered.
 
+## Making the data
+
+`pipeline/` makes the four images from the city model and OpenStreetMap (Python 3 with numpy, shapely, pyproj and
+Pillow). From the data committed in `pipeline/data/` it rebuilds them exactly:
+
+```sh
+python3 pipeline/pins.py                                   # the 1.25 m grid from the city's mesh and the water
+python3 pipeline/materials.py && python3 pipeline/materials.py --fine     # copper, gilt, trees, lawn (osm.json)
+python3 pipeline/heights.py && python3 pipeline/heights.py --fine         # demo/public/city.png, city-fine.png
+python3 pipeline/landmarks.py && python3 pipeline/landmarks.py --fine     # landmarks.png, landmarks-fine.png
+```
+
+`landmarks.py --fetch` asks OpenStreetMap's API for the buildings' outlines again. To start from the city model itself,
+download the buildings' DXF zip of Københavns Kommune's *3D bymodel* from
+[opendata.dk](https://www.opendata.dk/city-of-copenhagen/kobenhavn-3d-bymodel) (too large to commit) and run
+`dxf2bin.py` over the districts its header lists (it needs ezdxf), then `prep.py`, which writes `data/city.npz` (the
+buildings, each standing on the street) and the 2.5 m `data/pins.npz`.
+
 ## Licences
 
 The code is MIT (`LICENSE`).
 
 The data is not the code's. The heights come from Københavns Kommune's 3D city model (2013), CC BY; the water, the
 materials and the landmarks' outlines from OpenStreetMap, © OpenStreetMap contributors, under the
-[Open Database License](https://opendatacommons.org/licenses/odbl/). The four images are made from both
-and are available under the ODbL. Credit both wherever you show them. The forecast is MET Norway's
+[Open Database License](https://opendatacommons.org/licenses/odbl/). The four images and `pipeline/data/` are
+made from both and are available under the ODbL. Credit both wherever you show them. The forecast is MET Norway's
 ([api.met.no](https://api.met.no/), CC BY 4.0).
 
 By [Oliver Kure Olsen](https://work.draindk.tech).
