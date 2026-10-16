@@ -4,7 +4,7 @@ A city as a table of steel pins. Copenhagen's inner harbour as 823,592 pins, one
 raised to its roof and lit by the sun as it stands over Copenhagen at the hour you set. Press the roofs and they spring
 back; touch the harbour and the wave runs on down the canals.
 
-**[Live demo](https://ollibolli8.github.io/pintable/)** · Maquette 04 on [work.draindk.tech](https://work.draindk.tech/lab/pintable/)
+**[Live demo](https://ollibolli8.github.io/Pintable/)** · Maquette 04 on [work.draindk.tech](https://work.draindk.tech/lab/pintable/)
 
 three.js and GLSL in plain TypeScript modules, no framework.
 
