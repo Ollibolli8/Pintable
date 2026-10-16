@@ -4,7 +4,7 @@ html, body { margin: 0; background: #030304; }
 body { font: 500 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: #e7e6e2; -webkit-font-smoothing: antialiased; }
 .ps { --ink: #e7e6e2; --dim: rgb(231 230 226 / .58); --pad: clamp(20px, 3.4vw, 48px); --mono: 400 10px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
   --stage: max(560px, 100svh); position: relative; height: 100svh; min-height: 560px; overflow: hidden; background: #030304; }
-.ps-stage { position: absolute; inset: 0; outline: none; }
+.ps-stage { position: absolute; inset: 0; outline: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 .ps-stage:focus-visible { box-shadow: inset 0 0 0 2px rgb(231 230 226 / .5); }
 /* the room's dark kept behind the type, so a close view of the roofs never runs under it */
 .ps::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
@@ -44,7 +44,7 @@ body { font: 500 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; col
 .ps-foot a { color: inherit; text-underline-offset: .2em; }
 
 /* the dials */
-.ps-dials { left: var(--pad); bottom: max(32px, 5.5svh); display: grid; gap: 12px; width: 360px; }
+.ps-dials { left: var(--pad); bottom: max(32px, 5.5svh); display: grid; gap: 12px; width: 360px; touch-action: manipulation; }
 .dial { width: 100%; }
 .dial-head { display: flex; align-items: baseline; gap: 10px; min-height: 20px; margin: 0 0 6px; white-space: nowrap; }
 .dial-label, .ps-row-label { font: var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
