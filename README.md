@@ -34,6 +34,8 @@ plinth's top and the page's scroll runs the hours, and its comments still speak 
 `src/stage.ts` sets the table in a polished ring in a dark room and gives it a camera and hands: on the table a pointer
 presses (a resting mouse is a fingertip held over the roofs, which the tall ones dip under); beside it, with the right
 button or with two fingers it turns the camera; the wheel or a pinch goes closer, towards the point under the pointer.
+On a touch screen one finger beside the table scrolls the page, so give the canvas `touch-action: pan-y`: the stage
+holds a finger that comes down on the table itself.
 
 ## Use
 

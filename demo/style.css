@@ -11,7 +11,7 @@ body { font: 500 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; col
   background: radial-gradient(60% 44% at 0% 18%, rgb(3 3 4 / .78), rgb(3 3 4 / 0)), radial-gradient(52% 40% at 0% 100%, rgb(3 3 4 / .8), rgb(3 3 4 / 0)),
     radial-gradient(34% 30% at 100% 100%, rgb(3 3 4 / .7), rgb(3 3 4 / 0)), radial-gradient(26% 16% at 100% 8%, rgb(3 3 4 / .6), rgb(3 3 4 / 0)); }
 .ps canvas, .ps-poster { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.ps canvas { opacity: 0; transition: opacity .9s; touch-action: none; cursor: grab; }
+.ps canvas { opacity: 0; transition: opacity .9s; touch-action: pan-y; cursor: grab; }   /* (the stage holds a finger on the table itself) */
 .ps[data-gl="on"] canvas { opacity: 1; }
 .ps-poster { display: none; object-fit: cover; pointer-events: none; }
 .ps[data-gl="off"] .ps-poster { display: block; }

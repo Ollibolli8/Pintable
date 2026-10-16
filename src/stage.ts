@@ -200,7 +200,9 @@ export function createStage(o: StageOptions) {
     table.worldToGrid(hitP, grid);
     return { x: grid.x, z: grid.z };
   }
-  type Hand = { mode: "press" | "turn"; x: number; y: number; id: number };
+  // (beside: a finger that came down off the table; alone it only turns the table sideways, as an up or down swipe there
+  // scrolls the page)
+  type Hand = { mode: "press" | "turn"; x: number; y: number; id: number; beside: boolean };
   const hands = new Map<number, Hand>();
   let hover: { x: number; y: number } | null = null, fine = false, handled = false, arriving = false;
   let pinch: { d: number; a: number; dist: number; b: number } | null = null;
@@ -225,10 +227,11 @@ export function createStage(o: StageOptions) {
     fine = e.pointerType === "mouse";
     touched();
     canvas.setPointerCapture(e.pointerId);
-    const turn = e.button === 2 || e.ctrlKey || e.altKey || hands.size > 0 || still || !onTable(x, y);
+    const off = !onTable(x, y);
+    const turn = e.button === 2 || e.ctrlKey || e.altKey || hands.size > 0 || still || off;
     // a second finger: both turn and pinch (a press under way lets go)
     if (hands.size > 0) for (const h of hands.values()) h.mode = "turn";
-    hands.set(e.pointerId, { mode: turn ? "turn" : "press", x, y, id: e.pointerId });
+    hands.set(e.pointerId, { mode: turn ? "turn" : "press", x, y, id: e.pointerId, beside: off && e.pointerType === "touch" });
     if (hands.size === 2) startPinch();
     invalidate();
   }
@@ -254,7 +257,7 @@ export function createStage(o: StageOptions) {
       clampView(want);
     } else if (h.mode === "turn") {
       want.b -= dx * 0.28;
-      want.el += dy * 0.2;
+      if (!h.beside) want.el += dy * 0.2;
       clampView(want);
     }
     invalidate();
@@ -303,6 +306,19 @@ export function createStage(o: StageOptions) {
     invalidate();
   }
   const menu = (e: Event) => e.preventDefault();
+  // On a touch screen the canvas is `touch-action: pan-y`, so the page still scrolls under a finger: on a phone the table
+  // fills the first screen and the page goes on below it. A finger that comes down on the table holds it (it presses
+  // the pins), and so do two fingers (they turn and pinch); one beside the table scrolls the page up or down.
+  let held = false;
+  function touchStart(e: TouchEvent) {
+    if (!ready) return;
+    const t = e.touches, r = rect();
+    held = t.length > 1 || !!onTable(t[0].clientX - r.left, t[0].clientY - r.top);
+    if (held) e.preventDefault();
+  }
+  const touchMove = (e: TouchEvent) => { if ((held || e.touches.length > 1) && e.cancelable) e.preventDefault(); };
+  canvas.addEventListener("touchstart", touchStart, { passive: false });
+  canvas.addEventListener("touchmove", touchMove, { passive: false });
   canvas.addEventListener("pointerdown", down);
   canvas.addEventListener("pointermove", move);
   canvas.addEventListener("pointerup", up);
@@ -474,6 +490,8 @@ export function createStage(o: StageOptions) {
       alive = false;
       cancelAnimationFrame(raf);
       ro.disconnect();
+      canvas.removeEventListener("touchstart", touchStart);
+      canvas.removeEventListener("touchmove", touchMove);
       canvas.removeEventListener("pointerdown", down);
       canvas.removeEventListener("pointermove", move);
       canvas.removeEventListener("pointerup", up);
