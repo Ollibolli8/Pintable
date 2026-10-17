@@ -805,13 +805,19 @@ export function createPinTable(o: {
         }
       });
     }
+    // The table goes up to the GPU a band of rows at a time too (all 16 MB of floats in the first frame was 0.1 s of a
+    // slow phone's): three uploads each row's range on its own, and the first band makes the texture.
+    await slices(NT, (a, b) => {
+      for (let r = a; r < b; r++) restTex.addUpdateRange(r * NT * 4, NT * 4);
+      restTex.needsUpdate = true;
+      renderer.initTexture(restTex);
+    }, 64);
     // All of it at once, when it is all there (the frame reads none of it before).
     if (!alive) return;
     tower = peak;
     order = sorted;
     waterPins = Int32Array.from(wet);
     found.forEach((m, k) => (marks[k] = m));
-    restTex.needsUpdate = true;
     loaded = true;
     dirty = true;
     o.invalidate();
@@ -875,6 +881,7 @@ export function createPinTable(o: {
       }
     }, 8);
     lampTex.needsUpdate = true;
+    renderer.initTexture(lampTex);
   }
 
   // ------------------------------------------------------------------------------------------ GPU passes
