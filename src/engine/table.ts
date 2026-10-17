@@ -805,12 +805,25 @@ export function createPinTable(o: {
         }
       });
     }
-    // The table goes up to the GPU a band of rows at a time too (all 16 MB of floats in the first frame was 0.1 s of a
-    // slow phone's): three uploads each row's range on its own, and the first band makes the texture.
+    // The table goes up to the GPU 64 rows (1 MB) at a time too (all 16 MB of floats in the first frame was 0.1 s of a
+    // slow phone's). three makes the texture (its storage, no data: dataReady off); each band then goes up from its own
+    // slice of the array. (three's update ranges send a row a call, each handed the whole array and the rows to skip,
+    // and Safari copied all 16 MB every row: 0.1 s a band.)
+    restTex.source.dataReady = false;
+    restTex.needsUpdate = true;
+    renderer.initTexture(restTex);
+    restTex.source.dataReady = true;
+    const gl = renderer.getContext() as WebGL2RenderingContext;
+    const st = renderer.state as unknown as { bindTexture(t: number, h?: WebGLTexture): void; pixelStorei(n: number, v: number | boolean): void };
     await slices(NT, (a, b) => {
-      for (let r = a; r < b; r++) restTex.addUpdateRange(r * NT * 4, NT * 4);
-      restTex.needsUpdate = true;
-      renderer.initTexture(restTex);
+      st.bindTexture(gl.TEXTURE_2D, (renderer.properties.get(restTex) as { __webglTexture?: WebGLTexture }).__webglTexture);
+      st.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      st.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      st.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      st.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+      st.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+      st.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, a, NT, b - a, gl.RGBA, gl.FLOAT, rest.subarray(a * NT * 4, b * NT * 4));
     }, 64);
     // All of it at once, when it is all there (the frame reads none of it before).
     if (!alive) return;
