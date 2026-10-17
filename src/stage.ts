@@ -432,7 +432,8 @@ export function createStage(o: StageOptions) {
     if (ready) lens.render(scene, camera, focus, lensAmount(at.dist), clock);
     else { renderer.setRenderTarget(null); renderer.clear(); }
     o.onFrame?.(now, 1000 / 60);
-    if (moving || !ready) raf = requestAnimationFrame(frame);
+    // (the table asks for a frame itself while the pointer is over it: one already asked for this frame is the next)
+    if (moving || !ready) { if (!raf) raf = requestAnimationFrame(frame); }
     else last = 0;
   }
 
@@ -522,6 +523,7 @@ export function createStage(o: StageOptions) {
       table.dispose(); lens.dispose(); room.dispose(); pmrem.dispose();
       ringGeo.dispose(); bodyGeo.dispose(); stemGeo.dispose(); steel.dispose(); black.dispose(); matte.dispose();
       renderer.dispose();
+      renderer.forceContextLoss();    // dispose() keeps the context until the canvas is collected
     },
   };
 }
