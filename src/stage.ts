@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { createPinTable, GRID, RISE } from "./engine/table";
 import { createMacroDof } from "./engine/lens";
+import { warmUp } from "./engine/warm";
 import { PLACES } from "./engine/places";
 import type { Light } from "./engine/sky";
 import { describe, setWeather, weatherSource } from "./engine/weather";
@@ -119,6 +120,17 @@ export function createStage(o: StageOptions) {
   // The sun (or the moon) on the ring: a light along the table's own, as bright as the pins have it.
   const sun = new THREE.DirectionalLight(0xffffff, 0);
   scene.add(sun, sun.target);
+  // Every shader the table's first frame draws compiles ahead, in the background where the browser can (engine/warm.ts),
+  // with the sun in (the light count is part of each program): the pins, ring, body and stem as drawn into the lens's
+  // own target, the lens's passes into theirs. On a first visit nothing is cached and the first frame compiled them
+  // (some 30 ms on his Mac). The table shows once they are ready; a compile that never reports in is given 4 s.
+  let warm = false;
+  setTimeout(() => {                                       // (in a task of its own: where nothing compiles in parallel, it is this one)
+    if (!alive) return;
+    let world: Promise<void> = Promise.resolve();
+    lens.within(() => { world = warmUp(renderer, scene, camera); });
+    void Promise.race([Promise.all([world, lens.warm()]), new Promise(r => setTimeout(r, 4000))]).then(() => { warm = true; invalidate(); });
+  }, 0);
 
   // ------------------------------------------------------------------------------------------ the camera
   // Where it looks from: a compass bearing (from the target out to the camera), the elevation, the distance (m), and the
@@ -370,7 +382,7 @@ export function createStage(o: StageOptions) {
   let hours = 0, news = "";
   const frameNdc = new THREE.Vector2();
   function update(dt: number, now: number) {
-    if (table.ready && !ready) {
+    if (table.ready && warm && !ready) {
       ready = true;
       o.onReady();
     }
@@ -417,10 +429,10 @@ export function createStage(o: StageOptions) {
     drawnAt = now;
     if (!still) clock += dt;
     const moving = update(dt, now);
-    if (table.ready) lens.render(scene, camera, focus, lensAmount(at.dist), clock);
+    if (ready) lens.render(scene, camera, focus, lensAmount(at.dist), clock);
     else { renderer.setRenderTarget(null); renderer.clear(); }
     o.onFrame?.(now, 1000 / 60);
-    if (moving || !table.ready) raf = requestAnimationFrame(frame);
+    if (moving || !ready) raf = requestAnimationFrame(frame);
     else last = 0;
   }
 

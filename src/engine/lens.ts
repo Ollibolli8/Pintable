@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { warmUp } from "./warm";
 
 /**
  * The opening's macro lens: depth of field over the whole frame, as a 70 mm lens close to a table model sees it. The
@@ -270,6 +271,17 @@ export function createMacroDof(renderer: THREE.WebGLRenderer, phone: boolean) {
         run(growMat, glare[i], true);
       }
       run(composeMat, null);
+    },
+    /** Compiles the lens's own passes now, each as it is drawn (into its target, the last to the screen). */
+    warm() {
+      const was = renderer.getRenderTarget(), ready: Promise<void>[] = [];
+      const passes: [THREE.Material, THREE.WebGLRenderTarget | null][] = [
+        [downMat, down], [gatherMat, blur], [tentMat, soft], [brightMat, glare[0]], [shrinkMat, glare[1]], [growMat, glare[0]], [composeMat, null],
+      ];
+      try {
+        for (const [m, rt] of passes) { quad.material = m; renderer.setRenderTarget(rt); ready.push(warmUp(renderer, scene, cam)); }
+      } finally { quad.material = composeMat; renderer.setRenderTarget(was); }
+      return Promise.all(ready);
     },
     /** Runs `compile` with the lens's own target bound: what the world draws into it compiles to its own shaders. */
     within(compile: () => void) {
