@@ -998,9 +998,9 @@ export function createPinTable(o: {
   const simMat = pass(SIM, { tSim: { value: simA.texture }, tH: { value: hRT.texture }, tRest: { value: restTex }, uDt: { value: 1 / 120 }, uHand: { value: new THREE.Vector4() }, uHandV: { value: new THREE.Vector2() }, uHandOn: { value: 0 }, uDip: { value: 0.5 }, uDrops: { value: Array.from({ length: 6 }, () => new THREE.Vector4()) }, ...boatU, uBoat: { value: v4s() } });
   const zeroMat = pass(ZERO, {});
   const run = (mat: THREE.Material, rt: RT) => { quad.material = mat; renderer.setRenderTarget(rt); renderer.render(passScene, passCam); };
-  // The water's step and its reset compile now, in the background, as drawn into the simulation's own target: not at
-  // the first boat or touch, which stalled a frame of the arrival.
-  for (const m of [simMat, zeroMat]) {
+  // Every pass compiles now, in the background, as drawn into a target: not in the city's first frame (on a first
+  // visit no shader is cached), nor the water's step and reset at the first boat or touch (a stalled arrival frame).
+  for (const m of [composeMat, reduceMat, combineMat, openMat, shadowMat, simMat, zeroMat]) {
     const was = renderer.getRenderTarget();
     quad.material = m;
     renderer.setRenderTarget(simB);
