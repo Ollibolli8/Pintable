@@ -141,6 +141,8 @@ export function createStage(o: StageOptions) {
   const dirOf = (b: number, el: number, out: THREE.Vector3) =>
     out.set(Math.sin(b * DEG) * Math.cos(el * DEG), Math.sin(el * DEG), -Math.cos(b * DEG) * Math.cos(el * DEG)).applyAxisAngle(UP, table.mesh.rotation.y);
   const UP = new THREE.Vector3(0, 1, 0), tgt = new THREE.Vector3(), dir = new THREE.Vector3(), focus = new THREE.Vector3();
+  const lensP = new THREE.Vector3();
+  let lensOff = 0;                                          // (m the focus is pulled off the target, on a landmark)
   const minEl = (dist: number) => THREE.MathUtils.lerp(3, 12, THREE.MathUtils.smoothstep(Math.log(dist), Math.log(0.18), Math.log(0.6)));
   function clampView(v: View) {
     v.dist = THREE.MathUtils.clamp(v.dist, MIN_DIST, wide * 1.2);
@@ -180,7 +182,22 @@ export function createStage(o: StageOptions) {
     // the lens focuses on the target, at the roofs' height round it once close
     const h = dist < 0.6 ? table.heightAt(at.gx, at.gz) * Math.min(1, (0.6 - dist) / 0.3) : 0;
     table.gridToWorld(at.gx, Math.max(0, h) * 0.6, at.gz, focus);
-    return moving;
+    // on a chosen landmark, on the whole of it, from its nearest roof to its furthest foot: where the two blur alike
+    // (the lens blurs what lies behind the focus at 0.6 of its rate in front: engine/lens.ts), pulled to, not cut
+    const depth = (p: THREE.Vector3) => -p.applyMatrix4(camera.matrixWorldInverse).z;
+    const aimed = depth(lensP.copy(focus)), m = chosen === null ? null : table.landmark(chosen);
+    let off = 0;
+    if (m?.hull) {
+      let near = Infinity, far = 0;
+      for (let i = 0; i < m.hull.length; i += 3) {
+        near = Math.min(near, depth(table.gridToWorld(m.hull[i], m.hull[i + 2] + liftPins(), m.hull[i + 1], lensP)));
+        far = Math.max(far, depth(table.gridToWorld(m.hull[i], 0, m.hull[i + 1], lensP)));
+      }
+      if (near > 0 && far > near) off = 1.6 / (1 / near + 0.6 / far) - aimed;
+    }
+    lensOff = still ? off : lensOff + (off - lensOff) * (1 - Math.exp(-dt * 4));
+    if (Math.abs(lensOff) > 1e-5) focus.set(0, 0, -(aimed + lensOff)).applyMatrix4(camera.matrixWorld);
+    return moving || Math.abs(off - lensOff) > 1e-4;
   }
   // The lens: a little blur seen whole, the opening's macro close in.
   const lensAmount = (dist: number) => THREE.MathUtils.lerp(0.95, 0.12, THREE.MathUtils.smoothstep(Math.log(dist), Math.log(0.28), Math.log(wide)));

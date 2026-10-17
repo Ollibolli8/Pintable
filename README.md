@@ -16,16 +16,23 @@ its 4, 16 and 64 block, so the ray steps over whole blocks at once and drops a l
 It finds the pin, then the pin's round head, its sides and the gap round it.
 
 - **Shadows** come from a second texture: for each pin, the height above which it sees the light, built in a handful
-  of doubling passes along the light's direction. It is redrawn only once the tallest shadow's tip would move.
+  of doubling passes along the light's direction. It is redrawn only once the tallest shadow's tip would move. How
+  much sky each head sees past its neighbours (lower in a courtyard or a narrow street) is a pass of its own too, run
+  only when the heights change.
 - **A press** runs a small simulation on the GPU. Each land pin springs back to its height and pulls at its neighbours,
   so a dent rings out across the roofs; the harbour's pins carry a wave, held in by the quays, so a touch on the water
   runs on down the canals. Boats go round the canals, raised out of the water's pins, and leave their wakes in it.
 - **The light** is the sun's or the moon's as they stand over the city at that moment (the low-precision formulas of
-  Meeus' *Astronomical Algorithms*, `src/engine/sky.ts`), warmer as the sun gets low, blue through twilight. After dark
-  the city's lamps come on along its streets and quays, windows light along the facades and the landmarks are floodlit.
+  Meeus' *Astronomical Algorithms*, `src/engine/sky.ts`), warmer as the sun gets low, blue through twilight. The steel
+  mirrors a sky with a direction: deep blue overhead, paler to the horizon, gold under a low sun and blue away from it,
+  so what lies in shade reads cool against the lit faces. The satin's glare toward a low sun rolls off like film, and
+  up close each head shows the rings of the lathe that turned it. The harbour's pins are blued nearly black and rock
+  each on its own, so the sun breaks on the water in glints. After dark the city's lamps come on along its streets and
+  quays, windows light along the facades and the landmarks are floodlit.
 - **The weather** is MET Norway's forecast for the hour (`src/engine/weather.ts`): the wind sets the harbour's swell and
   stirs the trees, cloud throws shadows that drift with it, rain wets the steel and rings the water.
 - **The lens** (`src/engine/lens.ts`) is a macro lens's depth of field over the whole frame, with bloom for the glints.
+  On a chosen landmark it holds the whole building, from its nearest roof to its furthest foot.
 
 The engine was written for the opening of [work.draindk.tech](https://work.draindk.tech), where the table is set into a
 plinth's top and the page's scroll runs the hours, and its comments still speak of that page.

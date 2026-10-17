@@ -51,6 +51,13 @@ const PASS_VERT = /* glsl */ `void main() { gl_Position = vec4(position.xy, 0.0,
 // A texel's middle in grid units (RES texels a unit, NT across: the materials' defines).
 const GRID_GLSL = /* glsl */ `
 vec2 mid(ivec2 c) { return (vec2(c) + 0.5) / RES; }`;
+// Each pin's own four random numbers (0 to 1).
+const RND_GLSL = /* glsl */ `
+uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+vec4 rnd(ivec2 c) {
+  uint a = pcg(uint(c.x) * 1031u + pcg(uint(c.y))), b = pcg(a), d = pcg(b), e = pcg(d);
+  return vec4(uvec4(a, b, d, e) >> 8u) / 16777215.0;
+}`;
 
 // The boats (boats.ts): where a point of the water is under a hull. Each hull a long box drawn to a rounded point over
 // its front part, its cabin a step up from the deck between a short foredeck and a shorter stern. Returns how much of
@@ -126,6 +133,23 @@ uniform highp sampler2D tH; uniform highp sampler2D t4; uniform highp sampler2D 
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
   gl_FragColor = vec4(texelFetch(tH, c, 0).r, texelFetch(t4, c / 4, 0).r, texelFetch(t16, c / 16, 0).r, texelFetch(t64, c / 64, 0).r);
+}`;
+// The sky a pin's head sees past its neighbours (6 m and 15 m off, eight ways round, turned a little pin by pin): lower
+// in a courtyard or a narrow street. A pin's own, so it is worked out once a pin for the heights as they stand (the
+// boats aside: their hulls come and go every frame) and again only when they change, not in every pixel every frame.
+const OPEN = /* glsl */ `
+uniform highp sampler2D tH;
+${RND_GLSL}
+float at(ivec2 q) { vec4 s = texelFetch(tH, q, 0); return s.g < -5.0 ? s.r : s.b; }   // (the pocket: its floor)
+void main() {
+  ivec2 c = ivec2(gl_FragCoord.xy);
+  float h = at(c), a = rnd(c).x, occ = 0.0;
+  for (int k = 0; k < 8; k++) {
+    float ang = float(k) * 0.7854 + a, r = k < 4 ? 2.5 : 6.0;
+    ivec2 q = clamp(c + ivec2(round(vec2(cos(ang), sin(ang)) * r * RES)), ivec2(0), ivec2(NT - 1));
+    occ += clamp((at(q) - h) / (r * 1.6), 0.0, 1.0);
+  }
+  gl_FragColor = vec4(1.0 - 0.55 * occ / 8.0);
 }`;
 // The height above which a pin sees the light: the highest of every pin towards the light, less the light's climb to
 // it. Each pass doubles how far it looks (1, 2, 4 ... 1024 texels).
@@ -214,11 +238,12 @@ const TRACE_FRAG = /* glsl */ `
 #include <common>
 #include <cube_uv_reflection_fragment>
 uniform highp sampler2D tMax; uniform highp sampler2D tRest; uniform highp sampler2D tShadow; uniform highp sampler2D tSim;
-uniform sampler2D envMap; uniform sampler2D tLamp;
+uniform sampler2D tOpen; uniform sampler2D envMap; uniform sampler2D tLamp;
 uniform vec3 uCamG; uniform mat4 uGtoClip;
 uniform vec3 uLight; uniform vec3 uLightColor; uniform vec2 uSunDir; uniform float uTan; uniform float uEnv; uniform float uPix;
 uniform float uWell; uniform float uFloor; uniform float uTop; uniform float uLit; uniform float uSun; uniform float uSwell;
 uniform vec3 uFill; uniform vec3 uFillColor; uniform float uNight; uniform vec3 uSky; uniform vec3 uGround; uniform vec3 uDome; uniform vec3 uGlow;
+uniform vec3 uRimAway; uniform vec3 uRimSun; uniform vec3 uAura;
 uniform float uRiseT; uniform float uSink; uniform sampler2D studioMap; uniform float uRoom;
 uniform vec2 uSpin; uniform float uWind; uniform vec2 uWindDir; uniform float uWindT; uniform float uCloud; uniform vec2 uCloudAt; uniform float uWet;
 uniform float uFlood[${PLACES.length}]; uniform vec2 uPicked;
@@ -231,11 +256,7 @@ const float RAD = 0.465, CHAMFER = 0.1, DOME = 0.7;
 // The city's light after dark (linear): sodium-warm lamps, windows a little whiter, floodlights whiter still.
 const vec3 LAMP = vec3(1.0, 0.56, 0.24), WINDOW = vec3(1.0, 0.74, 0.46), FLOOD = vec3(1.0, 0.8, 0.56);
 
-uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
-vec4 rnd(ivec2 c) {
-  uint a = pcg(uint(c.x) * 1031u + pcg(uint(c.y))), b = pcg(a), d = pcg(b), e = pcg(d);
-  return vec4(uvec4(a, b, d, e) >> 8u) / 16777215.0;
-}
+${RND_GLSL}
 // Each pin's material (materials.py, from OpenStreetMap): 0 steel, 1 patinated copper, 2 dark copper, 3 gilt, 4 a
 // tree's crown, 5 lawn. The land's kind is 1 + 0.08 x the material (so the press still treats it all as land).
 int matOf(float kind) { return kind > 1.5 ? 0 : int((kind - 1.0) * 12.5 + 0.5); }
@@ -328,28 +349,50 @@ vec2 envBRDF(float r, float NoV) {
   float a = min(k.x * k.x, exp2(-9.28 * NoV)) * k.x + k.y;
   return vec2(-1.04, 1.04) * a + k.zw;
 }
-// The room (tinted by the sky: blue through twilight, low at night), by day a pale sky over it (what the roofs and the
-// harbour mirror), and under the horizon the city's own streets, which is what a facade mirrors: lit by the sun by day
-// and by the lamps at night. After dark the city's own glow hangs low in the sky, so the harbour mirrors a dark amber
-// with the swell running through it rather than nothing. The city's sky goes with the city: a pin that has sunk flush
-// at the end (gCity 0) mirrors the studio it stands in, lit as the studio is, so the empty table reads as the plinth's
-// own steel top rather than a dark hole.
+// The sky by day as the steel mirrors it, in the table's space (where the sun is): deepest overhead (uDome), paler down
+// to the horizon, where it is lighter under the sun (uRimSun) than away from it (uRimAway), and brightest round the sun
+// itself (uAura), a glow the rougher steel spreads wider. As the sun gets low the horizon under it and its glow go gold
+// while the sky overhead and away from it stays blue: a domed head reads warm on its sunward side and cool on the
+// other, and what lies in shade, lit by that sky alone, reads blue against the faces the sun lights.
+vec3 sky(vec3 dir, float rough) {
+  float hz = pow(1.0 - clamp(dir.y, 0.0, 1.0), 3.0);
+  vec2 f = dir.xz / max(length(dir.xz), 1e-4), s = uLight.xz / max(length(uLight.xz), 1e-4);
+  float toward = 0.5 + 0.5 * dot(f, s), k = mix(36.0, 4.0, rough);
+  return mix(uDome, mix(uRimAway, uRimSun, toward * toward), hz) + uAura * (pow(max(dot(dir, uLight), 0.0), k) * (k + 2.0) / 38.0);
+}
+// The room (tinted by the sky: blue through twilight, low at night) under that sky, and under the horizon the city's
+// own streets, which is what a facade mirrors: lit by the sun by day and by the lamps at night. After dark the city's
+// own glow hangs low in the sky, so the harbour mirrors a dark amber with the swell running through it rather than
+// nothing. The city's sky goes with the city: a pin that has sunk flush at the end (gCity 0) mirrors the studio it
+// stands in, lit as the studio is, so the empty table reads as the plinth's own steel top rather than a dark hole.
 float gCity = 1.0;
 vec3 env(vec3 dirL, float rough) {
+  vec3 dirG = dirL;                                                // (the sky goes round with the sun)
   dirL = vec3(uSpin.x * dirL.x + uSpin.y * dirL.z, dirL.y, uSpin.x * dirL.z - uSpin.y * dirL.x);   // the room stays put as the table turns
   float below = smoothstep(0.04 + 0.2 * rough, -0.12 - 0.5 * rough, dirL.y);
-  float above = smoothstep(-0.04 - 0.3 * rough, 0.55, dirL.y);
+  float above = smoothstep(-0.04 - 0.3 * rough, 0.04 + 0.2 * rough, dirL.y);
   float low = smoothstep(-0.06 - 0.2 * rough, 0.02, dirL.y) * (1.0 - smoothstep(0.0, 0.45 + 0.3 * rough, dirL.y));
-  vec3 city = (textureCubeUV(envMap, dirL, rough).rgb * uSky + uDome * above + uGlow * low + uGround * below) * uEnv;
+  vec3 city = (textureCubeUV(envMap, dirL, rough).rgb * uSky + sky(dirG, rough) * above + uGlow * low + uGround * below) * uEnv;
   if (gCity > 0.999) return city;
   return mix(textureCubeUV(studioMap, dirL, rough).rgb * uRoom, city, gCity);
 }
 
+// A head turned on a lathe: its steel smoother along the rings the tool left (gT, the way round the head at the point)
+// than across them, so the light's highlight on it runs out from its middle in a streak, as on any machined part. gAn:
+// how much of that a pixel sees (only up close; 0 everywhere else).
+vec3 gT = vec3(1.0, 0.0, 0.0);
+float gAn = 0.0;
 vec3 brdf(vec3 n, vec3 V, vec3 L, vec3 f0, float a2, float NoV) {
   vec3 H = normalize(V + L);
   float NoL = max(dot(n, L), 0.0), NoH = max(dot(n, H), 0.0), VoH = max(dot(V, H), 0.0);
   vec3 F = f0 + (1.0 - f0) * pow(1.0 - VoH, 5.0);
-  return ggx(a2, NoH) * smithV(a2, NoV, NoL) * F * NoL;
+  float D = ggx(a2, NoH);
+  if (gAn > 0.0) {
+    float a = sqrt(a2), at = a * 0.3, ab = min(a * 2.5, 1.0);
+    float x = dot(gT, H) / at, y = dot(cross(n, gT), H) / ab, k = x * x + y * y + NoH * NoH;
+    D = mix(D, 1.0 / (PI * at * ab * k * k), gAn);
+  }
+  return D * smithV(a2, NoV, NoL) * F * NoL;
 }
 // Steel under the light, the room's own low lamp after dark (no shadows: it is broad and close) and the room. n and V
 // in table space; lit is the light's visibility. The land's steel is satin, bead-blasted: besides its sheen it has a
@@ -360,6 +403,10 @@ vec3 steel(vec3 n, vec3 V, vec3 f0, float rough, float lit, vec3 envC, float bro
   vec3 sun = mix(brdf(n, V, uLight, f0, a2, NoV), brdf(n, V, uLight, f0, 0.16, NoV), broad)
            + f0 * (broad * 0.2 * max(dot(n, uLight), 0.0));
   vec3 direct = sun * uLightColor * lit * uSun;
+  // The satin's sheen toward a low sun is some ten times a lit face: a film's shoulder rolls it off above 3, so the
+  // flat tops hold a bright grey with their grain in it instead of one white sheet (the harbour's glints keep theirs).
+  float L = dot(direct, vec3(0.2126, 0.7152, 0.0722)), over = max(L - 3.0, 0.0);
+  direct *= mix(1.0, (3.0 + over / (1.0 + over / 3.0)) / max(L, 1e-4), clamp(broad * 2.4, 0.0, 1.0));
   if (uNight > 0.01) direct += brdf(n, V, uFill, f0, mix(a2, 0.16, broad), NoV) * uFillColor * uSun;
   vec2 ab = envBRDF(rough, NoV);
   return min(direct, vec3(48.0)) + envC * (f0 * ab.x + ab.y);
@@ -491,13 +538,16 @@ void main() {
     vec3 n = face == 0 ? vec3(0.0, 1.0, 0.0) : face == 1 ? vec3(-sgn.x, 0.0, 0.0) : vec3(0.0, 0.0, -sgn.y);
     float fp = dist * uPix / max(abs(dot(n, V)), 0.2) * RES; // pins a pixel spans here
     float many = smoothstep(0.4, 1.6, fp);                   // past ~1 pin a pixel, the pixel holds their average
-    float gap, ao = 1.0;
+    float gap, ao = 1.0, lath = 0.0;
+    vec3 lathT = vec3(1.0, 0.0, 0.0);
     if (kind < 0.5) {
       // The pocket's floor and the pins' feet: near black.
       col = env(reflect(-V, n), 0.7) * 0.015;
       gap = 0.0;
     } else {
-      float tilt = mix(0.007, 0.012, wm);
+      // Each pin seated a little off true (the land's by up to a degree): up close the sun catches some heads and not
+      // their neighbours, so a lit square reads as a field of pins rather than one sheet.
+      float tilt = mix(0.017, 0.012, wm);
       // The harbour's pins are lapped flat and tilted along a slow swell (three trains of it), so the water breaks the
       // sun into glints that run across it.
       vec2 q = mid(c), swell = vec2(0.0);
@@ -507,6 +557,9 @@ void main() {
         swell += sea * 0.024 * uWindDir * cos(dot(q, uWindDir * 0.31) - uSwell * 1.1);
         swell += sea * 0.018 * vec2(-0.45, 0.89) * cos(dot(q, vec2(-0.45, 0.89) * 0.53) - uSwell * 1.6 + 1.7);
         swell += sea * 0.011 * vec2(0.95, -0.31) * cos(dot(q, vec2(0.95, -0.31) * 0.97) - uSwell * 2.3 + 4.1);
+        // Ripples: each pin rocks a little on its own, faster than the swell, so the sun breaks on the water in glints
+        // that come and go (further off, where a pixel holds several pins, they spread into a glitter path).
+        swell += (0.018 + 0.03 * uWind) * (1.0 - many) * vec2(sin(uSwell * (5.0 + 3.0 * rn.x) + rn.z * 6.283), cos(uSwell * (4.0 + 3.0 * rn.y) + rn.w * 6.283));
         // The wave the hand set off (the simulation's offsets): each pin tilted along its slope (a unit's rise a unit).
         float sl = texelFetch(tSim, max(c - ivec2(1, 0), ivec2(0)), 0).r, sr = texelFetch(tSim, min(c + ivec2(1, 0), ivec2(NT - 1)), 0).r;
         float su = texelFetch(tSim, max(c - ivec2(0, 1), ivec2(0)), 0).r, sd = texelFetch(tSim, min(c + ivec2(0, 1), ivec2(NT - 1)), 0).r;
@@ -528,17 +581,14 @@ void main() {
         float rim = clamp((rr - (RAD - CHAMFER)) / CHAMFER, 0.0, 1.0) * clamp(CHAMFER / fp - 0.4, 0.0, 1.0);
         float lean = (DOME * rr * (1.0 - wm) + rim * rim * 1.1) * (1.0 - many);
         n = normalize(vec3(out2.x * sin(lean) + jitter.x, cos(lean), out2.y * sin(lean) + jitter.y));
+        // Turned on a lathe (brdf()): seen up close, a head a few pixels across or more.
+        lath = (1.0 - wm) * (1.0 - many) * clamp(2.0 - fp * 3.5, 0.0, 1.0) * smoothstep(0.02, 0.12, rr);
+        vec3 tg = vec3(-out2.y, 0.0, out2.x);
+        lathT = normalize(tg - n * dot(tg, n) + vec3(1e-5, 0.0, 0.0));
         gap = mix(smoothstep(RAD - 0.5 * fp, RAD + 0.5 * fp, rr), 1.0 - PI * RAD * RAD, many);
         gap *= 0.45 + 0.55 * clamp(V.y * 1.6, 0.0, 1.0);      // at a low angle the heads hide the gaps between them
-        // The sky a pin sees past its neighbours (6 m and 15 m off): lower in a courtyard or a narrow street.
-        float occ = 0.0;
-        for (int k = 0; k < 8; k++) {
-          float ang = float(k) * 0.7854 + rn.x;
-          float r = k < 4 ? 2.5 : 6.0;
-          ivec2 q = clamp(c + ivec2(round(vec2(cos(ang), sin(ang)) * r * RES)), ivec2(0), ivec2(NT - 1));
-          occ += clamp((texelFetch(tMax, q, 0).r - h) / (r * 1.6), 0.0, 1.0);
-        }
-        ao = 1.0 - 0.55 * occ / 8.0;
+        // The sky a pin sees past its neighbours (OPEN: lower in a courtyard or a narrow street).
+        ao = texelFetch(tOpen, c, 0).r;
       } else {
         // A pin's side: a rod, its normal turning across it; rounded into the head at the top.
         float along = ((face == 1 ? P.z : P.x) - (face == 1 ? mid(c).y : mid(c).x)) * RES;   // (in pins)
@@ -566,6 +616,11 @@ void main() {
       // The landmark picked up (uPicked: its number, how far up): its steel polished, so it gleams apart from the rest.
       float sel = rest.a < -0.5 && abs(rest.a + uPicked.x) < 0.5 ? uPicked.y : 0.0;
       f0 *= 1.0 + 0.22 * sel; rough *= 1.0 - 0.45 * sel;
+      // The harbour's pins blued, nearly black, so by day the water reads deep: dark looked down into, the sky and the
+      // quays in it only at a low look, and its glints bright still (the sun is that much brighter than the sky). After
+      // dark it takes the lamps as bright steel does. (fl: what a pin returns of the lamps' light)
+      vec3 fl = f0;
+      f0 = mix(f0, vec3(0.11, 0.15, 0.19), wm * (1.0 - uNight));
       float lit = sunSeen(c, P, fp) * cloudShade(P);
       vec3 R = reflect(-V, n);
       vec3 envC = env(R, rough);
@@ -596,7 +651,9 @@ void main() {
         }
       }
 #endif
+      gT = lathT; gAn = lath;
       col = steel(n, V, f0, rough, lit, envC, 0.42 * (1.0 - wm)) * ao;
+      gAn = 0.0;
       if ((mt == 1 || mt >= 4) && m > 0.0) {
         // The patina (verdigris), the trees' crowns and the lawns: coloured, matt; darker wet. Leaves glow a little
         // with the sun behind them.
@@ -620,13 +677,13 @@ void main() {
         // the room's light), then the lamps and the windows themselves.
         vec2 at = face == 0 ? P.xz : P.xz - vec2(face == 1 ? sgn.x : 0.0, face == 2 ? sgn.y : 0.0) * 0.7;
         float pool = texture2D(tLamp, at / 512.0).r * exp(-max(P.y, 0.0) / 2.2) * mix(1.0, 0.25, wm);
-        col += f0 * LAMP * (pool * 2.2 * uNight * m) * ao;
+        col += fl * LAMP * (pool * 2.2 * uNight * m) * ao;
         if (boat) col += boatGlow(bI, P, face, h, many) * (uNight * m);
         else col += glow(c, P, face, h, fp, many, rest.a, mt) * m;
         // A landmark's floodlights on its walls (the patina takes them green).
         if (rest.a < -0.5) col += (mt == 1 ? vec3(0.16, 0.36, 0.28) : f0) * FLOOD * (flood(-rest.a, P, face, h, many) * 1.5 * uNight * m) * mix(1.0, ao, 0.5);
         // The water round a boat, lit by its cabin.
-        if (wm > 0.0 && bSd < 5.0) col += f0 * WINDOW * (0.45 * exp(-max(bSd, 0.0) / 1.3) * uNight * wm);
+        if (wm > 0.0 && bSd < 5.0) col += fl * WINDOW * (0.45 * exp(-max(bSd, 0.0) / 1.3) * uNight * wm);
         if (wm > 0.0 && face == 0 && R.y > 0.02) {
           // The quays' lamps in the harbour: the lamp map read where the mirrored ray climbs past a lamp's height,
           // at four heights, so each lamp lies on the water as a streak towards the eye that the swell breaks up.
@@ -636,7 +693,7 @@ void main() {
             vec2 q = P.xz + run * min(0.6 * exp2(float(i)), 40.0 / max(length(run), 1e-3));
             seen += texture2D(tLamp, q / 512.0).r;
           }
-          col += f0 * LAMP * (seen * 0.9 * uNight * wm);
+          col += fl * LAMP * (seen * 0.9 * uNight * wm);
         }
       }
 #ifdef DEBUG
@@ -695,8 +752,9 @@ export function createPinTable(o: {
   let simLive = false, simIdx = 0, dirty = true, hulls = false, shadowDirty = true, lastSink = -1;
   let waterPins = new Int32Array(0);                       // the harbour's pins, for the rain to fall on
   // The landmarks (PLACES' buildings, by their place in it): where each stands in the grid, its tallest pin and how far
-  // its pins reach from its middle; null for a place that isn't one or until they are read.
-  type Landmark = { x: number; z: number; top: number; reach: number; pins: number };
+  // its pins reach from its middle; null for a place that isn't one or until they are read. hull: its tallest pin and
+  // its furthest pin eight ways round, x, z and height each (units), for the lens to hold it whole.
+  type Landmark = { x: number; z: number; top: number; reach: number; pins: number; hull?: number[] };
   const marks: (Landmark | null)[] = PLACES.map(() => null);
 
   // Reading the city is most of a second's work on a slow phone. It runs in slices, each its own task: `run` over `n`
@@ -785,7 +843,7 @@ export function createPinTable(o: {
       g.drawImage(mb, 0, 0);
       mb.close();
       const mp = g.getImageData(0, 0, NT, NT).data;
-      const sum = PLACES.map(() => [0, 0, 0, -1e9]);           // pins, x, z, tallest
+      const sum = PLACES.map(() => [0, 0, 0, -1e9, 0]);        // pins, x, z, tallest, where it is
       await slices(NT * NT, (a, b) => {
         for (let i = a; i < b; i++) {
           const kind = rest[i * 4 + 1];
@@ -794,16 +852,26 @@ export function createPinTable(o: {
           if (!id || id > PLACES.length || kind < 0.5 || kind > 1.5) continue;     // (land only)
           rest[i * 4 + 3] = -id;
           const s = sum[id - 1];
-          s[0]++; s[1] += (i % NT + 0.5) / RES; s[2] += (Math.floor(i / NT) + 0.5) / RES; s[3] = Math.max(s[3], rest[i * 4]);
+          s[0]++; s[1] += (i % NT + 0.5) / RES; s[2] += (Math.floor(i / NT) + 0.5) / RES;
+          if (rest[i * 4] > s[3]) { s[3] = rest[i * 4]; s[4] = i; }
         }
       });
-      sum.forEach(([n, x, z, top], k) => { if (n) found[k] = { x: x / n, z: z / n, top, reach: 0, pins: n }; });
+      const at = (i: number) => [(i % NT + 0.5) / RES, (Math.floor(i / NT) + 0.5) / RES, rest[i * 4]];
+      const far = PLACES.map(() => [-1e9, -1e9, -1e9, -1e9, -1e9, -1e9, -1e9, -1e9]), farAt = PLACES.map(() => new Int32Array(8));
+      sum.forEach(([n, x, z, top, ti], k) => { if (n) found[k] = { x: x / n, z: z / n, top, reach: 0, pins: n, hull: at(ti) }; });
       await slices(NT * NT, (a, b) => {
         for (let i = a; i < b; i++) {
-          const m = rest[i * 4 + 3] < -0.5 ? found[-rest[i * 4 + 3] - 1] : null;
-          if (m) m.reach = Math.max(m.reach, Math.hypot((i % NT + 0.5) / RES - m.x, (Math.floor(i / NT) + 0.5) / RES - m.z));
+          const k = rest[i * 4 + 3] < -0.5 ? -rest[i * 4 + 3] - 1 : -1, m = k >= 0 ? found[k] : null;
+          if (!m) continue;
+          const dx = (i % NT + 0.5) / RES - m.x, dz = (Math.floor(i / NT) + 0.5) / RES - m.z;
+          m.reach = Math.max(m.reach, Math.hypot(dx, dz));
+          for (let d = 0; d < 8; d++) {
+            const ang = d * Math.PI / 4, p = dx * Math.cos(ang) + dz * Math.sin(ang);
+            if (p > far[k][d]) { far[k][d] = p; farAt[k][d] = i; }
+          }
         }
       });
+      found.forEach((m, k) => { if (m) for (const i of farAt[k]) m.hull!.push(...at(i)); });
     }
     // The table goes up to the GPU 64 rows (1 MB) at a time too (all 16 MB of floats in the first frame was 0.1 s of a
     // slow phone's). three makes the texture (its storage, no data: dataReady off); each band then goes up from its own
@@ -909,6 +977,11 @@ export function createPinTable(o: {
     new THREE.ShaderMaterial({ vertexShader: PASS_VERT, fragmentShader: frag, uniforms, defines: grid, depthTest: false, depthWrite: false });
   const simA = target(NT), simB = target(NT), hRT = target(NT), r4 = target(NT / 4), r16 = target(NT / 16), r64 = target(NT / 64);
   const maxRT = target(NT), shA = target(NT), shB = target(NT);
+  // (the open sky a pin sees, 0 to 1: a byte a pin is enough)
+  const openRT = new THREE.WebGLRenderTarget(NT, NT, {
+    type: THREE.UnsignedByteType, format: THREE.RedFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    depthBuffer: false, stencilBuffer: false, generateMipmaps: false,
+  });
   const sim = [simA, simB];
   // The boats as the heights and the tracer have them (where they are this frame), and as the simulation has them
   // (where they are at each of its steps).
@@ -920,6 +993,7 @@ export function createPinTable(o: {
   const composeMat = pass(COMPOSE, { tRest: { value: restTex }, tSim: { value: simA.texture }, uTime: { value: 0 }, uSink: { value: 0 }, uFloor: { value: FLOOR }, uLift: { value: new THREE.Vector4() }, ...boatU });
   const reduceMat = pass(REDUCE, { tSrc: { value: null } });
   const combineMat = pass(COMBINE, { tH: { value: hRT.texture }, t4: { value: r4.texture }, t16: { value: r16.texture }, t64: { value: r64.texture } });
+  const openMat = pass(OPEN, { tH: { value: hRT.texture } });
   const shadowMat = pass(SHADOW, { tSrc: { value: null }, uDir: { value: new THREE.Vector2() }, uTan: { value: 0 }, uStep: { value: 1 }, uInit: { value: 1 } });
   const simMat = pass(SIM, { tSim: { value: simA.texture }, tH: { value: hRT.texture }, tRest: { value: restTex }, uDt: { value: 1 / 120 }, uHand: { value: new THREE.Vector4() }, uHandV: { value: new THREE.Vector2() }, uHandOn: { value: 0 }, uDip: { value: 0.5 }, uDrops: { value: Array.from({ length: 6 }, () => new THREE.Vector4()) }, ...boatU, uBoat: { value: v4s() } });
   const zeroMat = pass(ZERO, {});
@@ -983,8 +1057,9 @@ export function createPinTable(o: {
   const envH = (roomEnv.texture.image as { height: number }).height;
   const maxMip = Math.log2(envH) - 2;
   const u = {
-    tMax: { value: maxRT.texture }, tRest: { value: restTex }, tShadow: { value: shA.texture }, tSim: { value: simA.texture }, tLamp: { value: lampTex }, envMap: { value: roomEnv.texture }, studioMap: { value: studioEnv.texture },
+    tMax: { value: maxRT.texture }, tOpen: { value: openRT.texture }, tRest: { value: restTex }, tShadow: { value: shA.texture }, tSim: { value: simA.texture }, tLamp: { value: lampTex }, envMap: { value: roomEnv.texture }, studioMap: { value: studioEnv.texture },
     uFill: { value: new THREE.Vector3(0, 1, 0) }, uFillColor: { value: new THREE.Vector3() }, uNight: { value: 0 }, uSky: { value: new THREE.Vector3(1, 1, 1) }, uGround: { value: new THREE.Vector3() }, uDome: { value: new THREE.Vector3() }, uGlow: { value: new THREE.Vector3() },
+    uRimAway: { value: new THREE.Vector3() }, uRimSun: { value: new THREE.Vector3() }, uAura: { value: new THREE.Vector3() },
     uCamG: { value: new THREE.Vector3() }, uGtoClip: { value: new THREE.Matrix4() },
     uLight: { value: new THREE.Vector3(0, 1, 0) }, uLightColor: { value: new THREE.Vector3(10, 10, 10) }, uSunDir: { value: new THREE.Vector2(0, 1) }, uTan: { value: 1 }, uEnv: { value: 4.5 },
     uPix: { value: 0.001 }, uWell: { value: WELL }, uFloor: { value: FLOOR }, uTop: { value: TOP }, uLit: { value: 1 }, uSun: { value: 1 }, uSwell: { value: 0 }, uPitch: { value: PITCH },
@@ -1025,7 +1100,7 @@ export function createPinTable(o: {
   // shadows with the sun they were cast by, so the two always agree.
   let light: Light = lightAt(o.at ?? new Date()), lightTime = o.at ?? new Date(), lightMs = 0, lightHours = NaN;
   const sunL = new THREE.Vector3(), sunBase = new THREE.Vector3(), tip = new THREE.Vector2(), tipCast = new THREE.Vector2(1e6, 1e6);
-  const UP = new THREE.Vector3(0, 1, 0);
+  const UP = new THREE.Vector3(0, 1, 0), GREY = new THREE.Vector3(0.36, 0.37, 0.39);
   // The visitor's turn of the table (radians, about its centre): the sun and the room stay where they are, so the light
   // falls on the city from another side and the shadows wheel round.
   let spin = 0;
@@ -1055,7 +1130,15 @@ export function createPinTable(o: {
       // Under cloud the sky is brighter and greyer (and the sun's own light goes in the shader, cell by cell).
       const cl = wx.cloud;
       u.uSky.value.set(...light.sky).lerp(new THREE.Vector3(0.8, 0.82, 0.86), 0.5 * cl);
-      u.uDome.value.set(0.24, 0.3, 0.4).lerp(new THREE.Vector3(0.36, 0.37, 0.39), cl).multiplyScalar(light.day * (1 + 0.9 * cl));
+      // The sky (the shader's sky()): by day a clear blue over a paler horizon; as the sun gets low the blue overhead
+      // deepens and the horizon under the sun and the glow round it go gold; under cloud all of it one grey, brighter,
+      // and the glow gone.
+      const gold = 1 - THREE.MathUtils.smoothstep(light.el, 3, 24), sk = light.day * (1 + 0.9 * cl);
+      const tone = (out: THREE.Vector3, a: number[], b: number[]) => out.set(a[0] + (b[0] - a[0]) * gold, a[1] + (b[1] - a[1]) * gold, a[2] + (b[2] - a[2]) * gold).lerp(GREY, cl).multiplyScalar(sk);
+      tone(u.uDome.value, [0.15, 0.22, 0.4], [0.12, 0.19, 0.46]);
+      tone(u.uRimAway.value, [0.34, 0.38, 0.44], [0.3, 0.3, 0.48]);
+      tone(u.uRimSun.value, [0.44, 0.45, 0.46], [0.95, 0.52, 0.24]);
+      tone(u.uAura.value, [0.8, 0.78, 0.72], [1.7, 0.85, 0.3]).multiplyScalar((1 - 0.95 * cl) / (1 + 0.9 * cl));
       u.uGlow.value.set(0.5, 0.36, 0.26).multiplyScalar(n * (1 + 0.8 * cl));  // the city's glow on the low sky after dark (on cloud, more)
       u.uNight.value = n;
       // The wind blows towards its bearing + 180°: in the grid (x east, z south), turned with the table below.
@@ -1197,7 +1280,7 @@ export function createPinTable(o: {
       reduceMat.uniforms.tSrc.value = r4.texture; run(reduceMat, r16);
       reduceMat.uniforms.tSrc.value = r16.texture; run(reduceMat, r64);
       run(combineMat, maxRT);
-      if (dirty) shadowDirty = true;
+      if (dirty) { run(openMat, openRT); shadowDirty = true; }
     }
     if (shadowDirty && loaded) {
       const h = Math.hypot(sunL.x, sunL.z);
@@ -1396,8 +1479,8 @@ export function createPinTable(o: {
     },
     dispose() {
       alive = false;
-      for (const rt of [simA, simB, hRT, r4, r16, r64, maxRT, shA, shB]) rt.dispose();
-      for (const m of [composeMat, reduceMat, combineMat, shadowMat, simMat, zeroMat, material]) m.dispose();
+      for (const rt of [simA, simB, hRT, r4, r16, r64, maxRT, openRT, shA, shB]) rt.dispose();
+      for (const m of [composeMat, reduceMat, combineMat, openMat, shadowMat, simMat, zeroMat, material]) m.dispose();
       restTex.dispose(); lampTex.dispose(); tri.dispose(); geo.dispose(); roomEnv?.dispose(); studioEnv.dispose(); pmrem.dispose();
     },
   };
