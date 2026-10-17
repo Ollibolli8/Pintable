@@ -1067,8 +1067,6 @@ export function createPinTable(o: {
   // ------------------------------------------------------------------------------------------ the hand
   const hand = { x: 0, z: 0, px: 0, pz: 0, depth: 5, radius: 9, on: false, lastAt: -1e9, water: false, wet: false };
   let under: number | null = null;
-  // What the hand stirs each frame, for the sound (pin-sound.ts): land pins it moves a second, its speed through water.
-  const stir = { pins: 0, water: 0 };
   const inv = new THREE.Matrix4(), ray = new THREE.Ray(), ndcV = new THREE.Vector3();
   /** Where a pointer (NDC) meets the city: grid x, z, or null off the table. */
   function hit(ndc: THREE.Vector2, camera: THREE.Camera) {
@@ -1161,10 +1159,6 @@ export function createPinTable(o: {
     setBoats(boatU.uBoat.value, boatT);
     boatU.uBoatDip.value = simLive ? BOAT_DIP : 0;
     u.tSim.value = sim[simIdx].texture;
-    // (a press moves the pins across the fingertip's width; a mouse held over the roofs only dips the tall ones)
-    const speed = hand.on && !still ? Math.hypot(hand.x - hand.px, hand.z - hand.pz) / Math.max(dt, 1 / 240) : 0;
-    stir.water = hand.wet ? speed : 0;
-    stir.pins = hand.wet ? 0 : speed * hand.radius * (hand.depth < 0 ? 1.1 : 0.12);
     hand.px = hand.x; hand.pz = hand.z;
     if (rising || (loaded && !settled)) dirty = true;      // (and once more after the wave, so it ends risen)
     let lifting = false;
@@ -1241,8 +1235,6 @@ export function createPinTable(o: {
     relight() { lightHours = NaN; o.invalidate(); },
     get failed() { return failed; },
     get light() { return light; },
-    /** What the hand stirred this frame: land pins moved a second, its speed through the water (pins a second). */
-    get stir() { return stir; },
     /** How many pins have come up so far (the arrival's count). */
     get risen() {
       if (introT < 0 || !order.length) return 0;
@@ -1253,8 +1245,6 @@ export function createPinTable(o: {
     },
     /** Where landmark i (its place in PLACES) stands, or null: its middle in the grid, its tallest pin, its reach. */
     landmark(i: number) { return marks[i] ?? null; },
-    /** Pins a unit each way (2 on the fine table): the scene's sounds count the first table's pins. */
-    get res() { return RES; },
     /** The landmark (its place in PLACES) under the pointer, or null. */
     get under() { return under; },
     /**

@@ -3,7 +3,6 @@ import { createPinTable, GRID, RISE } from "./engine/table";
 import { createMacroDof } from "./engine/lens";
 import { PLACES } from "./engine/places";
 import type { Light } from "./engine/sky";
-import type { PinSound } from "./engine/sound";
 import { describe, setWeather, weatherSource } from "./engine/weather";
 
 /**
@@ -69,7 +68,6 @@ export function createStage(o: StageOptions) {
   scene.add(table.mesh);
   const camera = new THREE.PerspectiveCamera(phone ? 30 : 24, 1, 0.02, 20);
   const n = GRID.n, R = GRID.pocket, PIN = GRID.n / 512;  // (places and press sizes are in 512ths of the table)
-  const RES2 = table.res * table.res;                      // (the sound counts pins as the first table's, 2.5 m)
 
   // ------------------------------------------------------------------------------------------ the set
   // The look frame's table: a thin polished ring round the pins, a black anodised body under it, a stem into the dark.
@@ -339,8 +337,6 @@ export function createStage(o: StageOptions) {
     if (pick === nudged) return;
     nudged = pick;
     table.lift(pick, pick === null ? 0 : pick === chosen ? liftPins() : nudgePins());
-    const m = pick === null ? null : table.landmark(pick);
-    if (m && sound?.on) sound.burst(Math.min(90, m.pins / (PIN * PIN * 6 * RES2)), 0.7, 0);
   }
   const lp = new THREE.Vector3();
   function placeLabel() {
@@ -354,7 +350,7 @@ export function createStage(o: StageOptions) {
   }
 
   // ------------------------------------------------------------------------------------------ the frame
-  let hours = 0, sound: PinSound | null = null, risenWas = 0, news = "";
+  let hours = 0, news = "";
   const frameNdc = new THREE.Vector2();
   function update(dt: number, now: number) {
     if (table.ready && !ready) {
@@ -381,13 +377,7 @@ export function createStage(o: StageOptions) {
     const e = (l.color[0] + l.color[1] + l.color[2]) / 3;
     sun.color.setRGB(l.color[0] / Math.max(e, 1e-3), l.color[1] / Math.max(e, 1e-3), l.color[2] / Math.max(e, 1e-3), THREE.LinearSRGBColorSpace);
     sun.intensity = e * 0.9 * (1 - 0.8 * (table.weather.cloud > 0.85 ? 1 : 0));
-    // the sound: the pins the hand moves, the water it stirs, the city rising
     const risen = table.risen;
-    if (sound?.on) {
-      const pan = press ? (press.x / width) * 2 - 1 : hover ? (hover.x / width) * 2 - 1 : 0;
-      sound.feed(table.stir.pins + (Math.max(0, risen - risenWas) / Math.max(dt, 1 / 120)) * 0.02 / (PIN * PIN * RES2), table.stir.water, pan, dt);
-    }
-    risenWas = risen;
     placeLabel();
     // the readout
     const w = table.weather, when = table.lightTime;
@@ -481,7 +471,6 @@ export function createStage(o: StageOptions) {
       invalidate();
       return true;
     },
-    setSound(s: PinSound | null) { sound = s; },
     setStill(s: boolean) { still = s; if (s) hands.clear(); invalidate(); },
     setPixelRatio(dpr: number) { renderer.setPixelRatio(dpr); resize(); },
     /** The type moved (its fonts came in): fit the table to the frame again. */

@@ -1,13 +1,12 @@
 import "./style.css";
 import { createStage, type News, type Region, type Stage } from "../src/stage";
 import { PINS_COUNT, PINS_FINE, PLACES } from "../src/engine/places";
-import { createPinSound, type PinSound } from "../src/engine/sound";
 import { clockAt, dayText, hhmm, lightText, moment, sunTimes } from "../src/clock";
 import { createDial } from "./dial";
 
 /**
  * The demo: the table in its ring, and the moment (an hour of today, midsummer or midwinter on Copenhagen's clock), the
- * sky (the forecast or one picked), the places and sound round it. Everything it sets goes through the stage's own
+ * sky (the forecast or one picked) and the places round it. Everything it sets goes through the stage's own
  * calls (src/stage.ts); nothing here draws.
  */
 const $ = <T extends Element>(s: string) => document.querySelector(s) as T;
@@ -64,7 +63,7 @@ function showRead() {
     : `<span>${dayText(D.y, D.m, D.d)} · ${hhmm(minute)}</span><span>${news.weather}${news.source === "met" ? " · MET Norway" : ""}</span>`;
 }
 
-// ------------------------------------------------------------------------------------------ places and sound
+// ------------------------------------------------------------------------------------------ places
 const places = $<HTMLSelectElement>(".ps-places");
 PLACES.forEach((p, i) => {
   if (p.kind !== "building" || !p.fact) return;
@@ -76,18 +75,6 @@ places.addEventListener("change", () => {
   if (places.value === "") stage?.home();
   else stage?.choose(Number(places.value));
 });
-let sound: PinSound | null = null, soundOn = false;
-const soundButton = $<HTMLButtonElement>(".ps-sound");
-// the sound starts inside the tap itself (no await before it): iOS Safari only lets a page make sound from a gesture
-soundButton.addEventListener("click", () => {
-  if (!sound) sound = createPinSound();
-  soundOn = !soundOn;
-  sound.set(soundOn);
-  stage?.setSound(soundOn ? sound : null);
-  soundButton.setAttribute("aria-pressed", String(soundOn));
-  soundButton.textContent = soundOn ? "Sound on" : "Sound off";
-});
-document.addEventListener("visibilitychange", () => { if (document.hidden && soundOn) soundButton.click(); });
 hint.textContent = reduced ? "Motion is off: set the hour, the day and the sky." : touch
   ? "Press the pins · two fingers turn the table and go closer" : "Press the pins · drag beside the table or right-drag to turn it · scroll to go closer";
 
