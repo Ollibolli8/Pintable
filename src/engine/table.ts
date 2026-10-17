@@ -699,6 +699,24 @@ export function createPinTable(o: {
   type Landmark = { x: number; z: number; top: number; reach: number; pins: number };
   const marks: (Landmark | null)[] = PLACES.map(() => null);
 
+  // Reading the city is most of a second's work on a slow phone. It runs in slices, each its own task: `run` over `n`
+  // steps, `size` at a time, until 6 ms have gone, then the page draws and answers (in one task it held a slow phone for
+  // 0.7 s on arrival; 17 October). The break is a message, not a timer, which browsers hold back 4 ms once they chain.
+  let lap = 0;
+  async function slices(n: number, run: (from: number, to: number) => void, size = NT) {
+    for (let i = 0; i < n; i += size) {
+      run(i, Math.min(n, i + size));
+      if (performance.now() - lap < 6) continue;
+      await new Promise<void>(go => {
+        const ch = new MessageChannel();
+        ch.port1.onmessage = () => { ch.port1.close(); go(); };
+        ch.port2.postMessage(0);
+      });
+      if (!alive) throw new Error("left");
+      lap = performance.now();
+    }
+  }
+
   void (async () => {
     // (the landmarks' map is an extra: without it the city stands as it is, unlit at night and not lifting)
     const marksBmp = fetch(o.marks).then(r => (r.ok ? r.blob() : null))
@@ -714,41 +732,53 @@ export function createPinTable(o: {
     const px = g.getImageData(0, 0, NT, NT).data;
     let pins = 0, best = -1, bestAt = 0;
     const wet: number[] = [];
-    for (let i = 0; i < NT * NT; i++) {
-      const flags = px[i * 4 + 2];
-      if (flags & 2) {
-        pins++;
-        const m = ((px[i * 4] << 8) | px[i * 4 + 1]) * 128 / 65535;
-        const h = flags & 1 && m < 0.5 ? WATER : m / CITY_M;
-        rest[i * 4] = h;
-        // Water, or land with its material (heights.py: B >> 2): 1 + 0.08 x the material.
-        rest[i * 4 + 1] = flags & 1 && m < 0.5 ? 2 : 1 + 0.08 * Math.min(5, flags >> 2);
-        if (rest[i * 4 + 1] === 2) wet.push(i);
-        heights[i] = h;
-        if (h > best) { best = h; bestAt = i; }
-      } else {
-        rest[i * 4] = FLOOR;
-        heights[i] = FLOOR;
+    await slices(NT * NT, (a, b) => {
+      for (let i = a; i < b; i++) {
+        const flags = px[i * 4 + 2];
+        if (flags & 2) {
+          pins++;
+          const m = ((px[i * 4] << 8) | px[i * 4 + 1]) * 128 / 65535;
+          const h = flags & 1 && m < 0.5 ? WATER : m / CITY_M;
+          rest[i * 4] = h;
+          // Water, or land with its material (heights.py: B >> 2): 1 + 0.08 x the material.
+          rest[i * 4 + 1] = flags & 1 && m < 0.5 ? 2 : 1 + 0.08 * Math.min(5, flags >> 2);
+          if (rest[i * 4 + 1] === 2) wet.push(i);
+          heights[i] = h;
+          if (h > best) { best = h; bestAt = i; }
+        } else {
+          rest[i * 4] = FLOOR;
+          heights[i] = FLOOR;
+        }
       }
-    }
+    });
     // A colour-managed decode would shift the bytes: then the counts are off, and the hero stays as it was.
     if (pins !== PINS_COUNT || best < 30 || best > 45) throw new Error(`city: ${pins} pins, tallest ${best.toFixed(1)}`);
-    tower = { col: (bestAt % NT + 0.5) / RES, row: (Math.floor(bestAt / NT) + 0.5) / RES, h: best };
+    const peak = { col: (bestAt % NT + 0.5) / RES, row: (Math.floor(bestAt / NT) + 0.5) / RES, h: best };
     // The wave runs out from the tower after a moment of the bare table: 2 s of the rise to the far edge, each pin a
     // little early or late.
-    const delays: number[] = [];
-    let seed = 7;
+    const delays = new Float32Array(pins);
+    let seed = 7, count = 0, lo = Infinity, hi = -Infinity;
     const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-    for (let i = 0; i < NT * NT; i++) {
-      const col = (i % NT + 0.5) / RES, row = (Math.floor(i / NT) + 0.5) / RES;
-      const r = Math.hypot(col - tower.col, row - tower.row);
-      const delay = 0.6 + r * 0.0062 + (rand() - 0.5) * 0.09;
-      rest[i * 4 + 2] = delay;
-      if (rest[i * 4 + 1] > 0.5) delays.push(delay);
-    }
-    order = Float32Array.from(delays).sort();
-    waterPins = Int32Array.from(wet);
-    lamps(rand);
+    await slices(NT * NT, (a, b) => {
+      for (let i = a; i < b; i++) {
+        const col = (i % NT + 0.5) / RES, row = (Math.floor(i / NT) + 0.5) / RES;
+        const r = Math.hypot(col - peak.col, row - peak.row);
+        const delay = 0.6 + r * 0.0062 + (rand() - 0.5) * 0.09;
+        rest[i * 4 + 2] = delay;
+        if (rest[i * 4 + 1] > 0.5) { delays[count++] = delay; lo = Math.min(lo, delay); hi = Math.max(hi, delay); }
+      }
+    });
+    // In order, to count the pins that have risen: into buckets by value, then each bucket sorted on its own, which is
+    // the one sort's order in slices (the one sort was 0.2 s of a slow phone).
+    const B = 4096, per = B / (hi - lo), at = new Uint32Array(B + 1), sorted = new Float32Array(pins);
+    const bucket = (v: number) => Math.min(B - 1, Math.max(0, Math.floor((v - lo) * per)));
+    await slices(pins, (a, b) => { for (let i = a; i < b; i++) at[bucket(delays[i]) + 1]++; });
+    for (let k = 0; k < B; k++) at[k + 1] += at[k];
+    const fill = at.slice(0, B);
+    await slices(pins, (a, b) => { for (let i = a; i < b; i++) sorted[fill[bucket(delays[i])]++] = delays[i]; });
+    await slices(B, (a, b) => { for (let k = a; k < b; k++) sorted.subarray(at[k], at[k + 1]).sort(); }, 64);
+    await lamps(rand);
+    const found: (Landmark | null)[] = PLACES.map(() => null);
     const mb = await marksBmp;
     if (mb) {
       g.clearRect(0, 0, NT, NT);
@@ -756,27 +786,36 @@ export function createPinTable(o: {
       mb.close();
       const mp = g.getImageData(0, 0, NT, NT).data;
       const sum = PLACES.map(() => [0, 0, 0, -1e9]);           // pins, x, z, tallest
-      for (let i = 0; i < NT * NT; i++) {
-        const kind = rest[i * 4 + 1];
-        let id = mp[i * 4];
-        if (id > 100) id = 0;
-        if (!id || id > PLACES.length || kind < 0.5 || kind > 1.5) continue;     // (land only)
-        rest[i * 4 + 3] = -id;
-        const s = sum[id - 1];
-        s[0]++; s[1] += (i % NT + 0.5) / RES; s[2] += (Math.floor(i / NT) + 0.5) / RES; s[3] = Math.max(s[3], rest[i * 4]);
-      }
-      sum.forEach(([n, x, z, top], k) => { if (n) marks[k] = { x: x / n, z: z / n, top, reach: 0, pins: n }; });
-      for (let i = 0; i < NT * NT; i++) {
-        const m = rest[i * 4 + 3] < -0.5 ? marks[-rest[i * 4 + 3] - 1] : null;
-        if (m) m.reach = Math.max(m.reach, Math.hypot((i % NT + 0.5) / RES - m.x, (Math.floor(i / NT) + 0.5) / RES - m.z));
-      }
+      await slices(NT * NT, (a, b) => {
+        for (let i = a; i < b; i++) {
+          const kind = rest[i * 4 + 1];
+          let id = mp[i * 4];
+          if (id > 100) id = 0;
+          if (!id || id > PLACES.length || kind < 0.5 || kind > 1.5) continue;     // (land only)
+          rest[i * 4 + 3] = -id;
+          const s = sum[id - 1];
+          s[0]++; s[1] += (i % NT + 0.5) / RES; s[2] += (Math.floor(i / NT) + 0.5) / RES; s[3] = Math.max(s[3], rest[i * 4]);
+        }
+      });
+      sum.forEach(([n, x, z, top], k) => { if (n) found[k] = { x: x / n, z: z / n, top, reach: 0, pins: n }; });
+      await slices(NT * NT, (a, b) => {
+        for (let i = a; i < b; i++) {
+          const m = rest[i * 4 + 3] < -0.5 ? found[-rest[i * 4 + 3] - 1] : null;
+          if (m) m.reach = Math.max(m.reach, Math.hypot((i % NT + 0.5) / RES - m.x, (Math.floor(i / NT) + 0.5) / RES - m.z));
+        }
+      });
     }
-    restTex.needsUpdate = true;
+    // All of it at once, when it is all there (the frame reads none of it before).
     if (!alive) return;
+    tower = peak;
+    order = sorted;
+    waterPins = Int32Array.from(wet);
+    found.forEach((m, k) => (marks[k] = m));
+    restTex.needsUpdate = true;
     loaded = true;
     dirty = true;
     o.invalidate();
-  })().catch(e => { failed = true; o.onFail(e); o.invalidate(); });
+  })().catch(e => { if (!alive) return; failed = true; o.onFail(e); o.invalidate(); });
 
   // ------------------------------------------------------------------------------------------ the lamps
   // Where the city has its lamps after dark: along the streets, a lamp every 25 m or so at a facade's foot, and along
@@ -786,44 +825,55 @@ export function createPinTable(o: {
   const lampPx = new Uint8Array(NT * NT);
   const lampTex = new THREE.DataTexture(lampPx, NT, NT, THREE.RedFormat, THREE.UnsignedByteType);
   lampTex.minFilter = lampTex.magFilter = THREE.LinearFilter;
-  function lamps(rand: () => number) {
-    const near = (test: (i: number) => boolean) => {
-      const m = new Uint8Array(NT * NT), out = new Uint8Array(NT * NT);
-      for (let i = 0; i < NT * NT; i++) m[i] = test(i) ? 1 : 0;
-      for (let r = 0; r < NT; r++) for (let c = 0; c < NT; c++) {
-        let v = 0;
-        for (let dr = -1; dr <= 1 && !v; dr++) for (let dc = -1; dc <= 1 && !v; dc++) {
-          const rr = r + dr, cc = c + dc;
-          if (rr >= 0 && cc >= 0 && rr < NT && cc < NT) v = m[rr * NT + cc];
+  async function lamps(rand: () => number) {
+    // Where a test holds, or next to where it does (the 3 x 3 round each texel): across each row, then down each column.
+    const near = async (test: (i: number) => boolean) => {
+      const across = new Uint8Array(NT * NT), out = new Uint8Array(NT * NT);
+      await slices(NT, (a, b) => {
+        for (let r = a; r < b; r++) {
+          let before = 0, here = test(r * NT) ? 1 : 0;
+          for (let c = 0; c < NT; c++) {
+            const after = c + 1 < NT && test(r * NT + c + 1) ? 1 : 0;
+            across[r * NT + c] = before | here | after;
+            before = here; here = after;
+          }
         }
-        out[r * NT + c] = v;
-      }
+      }, 8);
+      await slices(NT, (a, b) => {
+        for (let i = a * NT; i < b * NT; i++) out[i] = across[i] | (i >= NT ? across[i - NT] : 0) | (i + NT < NT * NT ? across[i + NT] : 0);
+      }, 8);
       return out;
     };
     const kind = (i: number) => rest[i * 4 + 1];
     const land = (i: number) => kind(i) > 0.5 && kind(i) < 1.5, tree = (i: number) => Math.abs(kind(i) - 1.32) < 0.02;
-    const facade = near(i => land(i) && !tree(i) && rest[i * 4] > 2), quay = near(i => kind(i) === 2);
+    const facade = await near(i => land(i) && !tree(i) && rest[i * 4] > 2), quay = await near(i => kind(i) === 2);
     const lamp = new Float32Array(NT * NT);
-    for (let i = 0; i < NT * NT; i++) {
-      rest[i * 4 + 3] = 0;
-      if (!land(i) || rest[i * 4] > 0.4) continue;
-      const p = (quay[i] ? 0.15 : facade[i] ? 0.1 : 0) / RES;
-      if (p && rand() < p) rest[i * 4 + 3] = lamp[i] = 0.6 + 0.4 * rand();
-    }
+    await slices(NT * NT, (a, b) => {
+      for (let i = a; i < b; i++) {
+        rest[i * 4 + 3] = 0;
+        if (!land(i) || rest[i * 4] > 0.4) continue;
+        const p = (quay[i] ? 0.15 : facade[i] ? 0.1 : 0) / RES;
+        if (p && rand() < p) rest[i * 4 + 3] = lamp[i] = 0.6 + 0.4 * rand();
+      }
+    });
     // A separable Gaussian, sigma 2.5 m, then scaled so a lone lamp's peak is its own brightness.
     const S = RES, R = 3 * RES, w: number[] = [];
     for (let k = -R; k <= R; k++) w.push(Math.exp(-(k * k) / (2 * S * S)));
     const norm = 2 * Math.PI, tmp = new Float32Array(NT * NT);
-    for (let r = 0; r < NT; r++) for (let c = 0; c < NT; c++) {
-      let a = 0;
-      for (let k = -R; k <= R; k++) { const cc = c + k; if (cc >= 0 && cc < NT) a += lamp[r * NT + cc] * w[k + R]; }
-      tmp[r * NT + c] = a;
-    }
-    for (let r = 0; r < NT; r++) for (let c = 0; c < NT; c++) {
-      let a = 0;
-      for (let k = -R; k <= R; k++) { const rr = r + k; if (rr >= 0 && rr < NT) a += tmp[rr * NT + c] * w[k + R]; }
-      lampPx[r * NT + c] = Math.min(255, Math.round(a / norm * 2.5 * 255));
-    }
+    await slices(NT, (a, b) => {
+      for (let r = a; r < b; r++) for (let c = 0; c < NT; c++) {
+        let s = 0;
+        for (let k = -R; k <= R; k++) { const cc = c + k; if (cc >= 0 && cc < NT) s += lamp[r * NT + cc] * w[k + R]; }
+        tmp[r * NT + c] = s;
+      }
+    }, 8);
+    await slices(NT, (a, b) => {
+      for (let r = a; r < b; r++) for (let c = 0; c < NT; c++) {
+        let s = 0;
+        for (let k = -R; k <= R; k++) { const rr = r + k; if (rr >= 0 && rr < NT) s += tmp[rr * NT + c] * w[k + R]; }
+        lampPx[r * NT + c] = Math.min(255, Math.round(s / norm * 2.5 * 255));
+      }
+    }, 8);
     lampTex.needsUpdate = true;
   }
 
