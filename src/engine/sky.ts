@@ -54,8 +54,8 @@ export type Light = {
   az: number; el: number;                 // where the light that casts the shadows stands (degrees): the sun, or the moon
   shadeEl: number;                        // the elevation the shading uses (never quite flat)
   color: [number, number, number];        // that light, linear, times its irradiance on the table (none once both are down)
-  day: number;                            // 1 while the sun is well up, 0 from a little after sunset: the sky's own light
-  night: number;                          // 0 by day, 1 once the sky is dark: the city's lamps come on through dusk
+  day: number;                            // 1 while the sun is well up, 0 once civil twilight ends (7° down): the sky's own light
+  night: number;                          // 0 by day, 1 once the sky is dark: the city's lamps come on from sunset
   sky: [number, number, number];          // the room's light: neutral by day, blue through twilight, low and cool at night
 };
 
@@ -63,15 +63,17 @@ export type Light = {
  * The light on the table at a moment, continuous through the day, so a scroll through the hours never jumps: the sun
  * while it is up (warmer as it gets low), fading out as it sets (to nothing 3° under the horizon), then the moon, coming
  * up from nothing as the sky darkens and fading as it sets, brighter the fuller it is. Through twilight the room turns
- * blue and the city's lamps come on.
+ * blue and the city's lamps come on. The twilight sky keeps its light until civil twilight ends and the lamps come on
+ * from sunset, as Copenhagen's do, so the half hour after sunset, between the sun gone and the moon not yet shown, is
+ * not the darkest of the evening (it was until 19 October, with the lamps coming on only after it).
  */
 export function lightAt(t: Date): Light {
   const sun = sunAt(t);
-  const night = 1 - smooth(-8, -1, sun.el);
+  const night = 1 - smooth(-6, 1, sun.el);
   const twilight = smooth(-12, -2, sun.el) * (1 - smooth(-1, 6, sun.el));
   const tone = (d: [number, number, number], n: [number, number, number]): [number, number, number] =>
     [1 + (d[0] - 1) * twilight + (n[0] - 1) * night * (1 - twilight), 1 + (d[1] - 1) * twilight + (n[1] - 1) * night * (1 - twilight), 1 + (d[2] - 1) * twilight + (n[2] - 1) * night * (1 - twilight)];
-  const sky = tone([0.55, 0.7, 1.2], [0.2, 0.23, 0.32]), day = smooth(-4, 8, sun.el);
+  const sky = tone([0.55, 0.7, 1.2], [0.2, 0.23, 0.32]), day = smooth(-7, 8, sun.el);
   if (sun.el > -3) {
     const k = smooth(2, 24, sun.el), e = (6 + 9 * k) * smooth(-3, 3, sun.el);
     return { kind: sun.el > -0.83 ? "sun" : "night", az: sun.az, el: sun.el, shadeEl: Math.max(sun.el, 1.6),

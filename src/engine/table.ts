@@ -10,7 +10,7 @@ import { warmUp } from "./warm";
  * of the city (Københavns Kommune's 3D model, CC BY; the water from OpenStreetMap, ODbL), 823,592 of them, raised to
  * the buildings' heights at 1:2,246 (`?pins=coarse`: the first table, a pin for every 2.5 m, 205,892 of them). The
  * land's pins are satin, the water's polished. Lit by the sun as it stands over Copenhagen at a moment (now, or as
- * many hours on as the scroll has run), the moon after dark; pressed by the pointer or a finger.
+ * many hours on as the page sets), the moon after dark; pressed by the pointer or a finger.
  *
  * Nothing is a mesh of pins. One shader traces a ray per pixel through the heights (case-production/opening/heights.py
  * makes them: public/opening/city-fine.png), stepping over whole blocks of the city at once: each texel of the tracing
@@ -1094,13 +1094,13 @@ export function createPinTable(o: {
 
   // ------------------------------------------------------------------------------------------ the light
   // The light as it stands over Copenhagen at a moment (`hours` after now, or after `at`), turned to the model's grid
-  // (UTM's grid north is 2.95° east of true north here). The scroll runs the hours, so the light is placed every frame
-  // it changes; the shadows follow it (a dozen small passes) once the tallest shadow's tip would have moved 0.4 of a pin,
-  // which near noon is a frame in several and near sunset nearly every frame. Until then the shading reads the old
-  // shadows with the sun they were cast by, so the two always agree.
+  // (UTM's grid north is 2.95° east of true north here). A ring or a clock can run the hours, so the light is placed
+  // every frame they change; the shadows follow it (a dozen small passes) once the tallest shadow's tip would have moved
+  // 0.4 of a pin, which near noon is a frame in several and near sunset nearly every frame. Until then the shading reads
+  // the old shadows with the sun they were cast by, so the two always agree.
   let light: Light = lightAt(o.at ?? new Date()), lightTime = o.at ?? new Date(), lightMs = 0, lightHours = NaN;
   const sunL = new THREE.Vector3(), sunBase = new THREE.Vector3(), tip = new THREE.Vector2(), tipCast = new THREE.Vector2(1e6, 1e6);
-  const UP = new THREE.Vector3(0, 1, 0), GREY = new THREE.Vector3(0.36, 0.37, 0.39);
+  const UP = new THREE.Vector3(0, 1, 0), GREY = new THREE.Vector3(0.36, 0.37, 0.39), CITY_SKY = new THREE.Vector3(0.16, 0.13, 0.105);
   // The visitor's turn of the table (radians, about its centre): the sun and the room stay where they are, so the light
   // falls on the city from another side and the shadows wheel round.
   let spin = 0;
@@ -1140,6 +1140,10 @@ export function createPinTable(o: {
       tone(u.uRimSun.value, [0.44, 0.45, 0.46], [0.95, 0.52, 0.24]);
       tone(u.uAura.value, [0.8, 0.78, 0.72], [1.7, 0.85, 0.3]).multiplyScalar((1 - 0.95 * cl) / (1 + 0.9 * cl));
       u.uGlow.value.set(0.5, 0.36, 0.26).multiplyScalar(n * (1 + 0.8 * cl));  // the city's glow on the low sky after dark (on cloud, more)
+      // Nor is the sky overhead ever black over a city: its lamps light the haze (more under cloud), a dim amber that the
+      // roofs and the harbour hold, so a night without a moon still reads.
+      const haze = n * (1 + 1.2 * cl);
+      u.uDome.value.addScaledVector(CITY_SKY, haze); u.uRimAway.value.addScaledVector(CITY_SKY, haze); u.uRimSun.value.addScaledVector(CITY_SKY, haze);
       u.uNight.value = n;
       // The wind blows towards its bearing + 180°: in the grid (x east, z south), turned with the table below.
       const to = THREE.MathUtils.degToRad(wx.from + 180 - GRID_NORTH);
