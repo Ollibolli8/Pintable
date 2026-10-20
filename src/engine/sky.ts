@@ -61,11 +61,12 @@ export type Light = {
 
 /**
  * The light on the table at a moment, continuous through the day, so a scroll through the hours never jumps: the sun
- * while it is up (warmer as it gets low), fading out as it sets (to nothing 3° under the horizon), then the moon, coming
- * up from nothing as the sky darkens and fading as it sets, brighter the fuller it is. Through twilight the room turns
- * blue and the city's lamps come on. The twilight sky keeps its light until civil twilight ends and the lamps come on
- * from sunset, as Copenhagen's do, so the half hour after sunset, between the sun gone and the moon not yet shown, is
- * not the darkest of the evening (it was until 19 October, with the lamps coming on only after it).
+ * while it is up (warmer as it gets low), fading out as it sets (to nothing 3° under the horizon), then the moon,
+ * coming up from nothing as the sky darkens and fading as it sets, brighter the fuller it is, but a small light: a
+ * fifth of the noon sun when full (it was nearly half until 20 October, and painted the roofs white). Through twilight
+ * the room turns blue and the city's lamps come on. The twilight sky keeps its light until civil twilight ends and the
+ * lamps come on from sunset, as Copenhagen's do, so the half hour after sunset, between the sun gone and the moon not
+ * yet shown, is not the darkest of the evening (it was until 19 October, with the lamps coming on only after it).
  */
 export function lightAt(t: Date): Light {
   const sun = sunAt(t);
@@ -80,7 +81,7 @@ export function lightAt(t: Date): Light {
       color: [e, e * (0.56 + 0.38 * k), e * (0.34 + 0.52 * k)], day, night, sky };
   }
   const moon = moonAt(t);
-  const e = (3.2 + 4 * moon.lit) * smooth(0, 5, moon.el) * smooth(-3, -8, sun.el);
+  const e = (1.3 + 1.6 * moon.lit) * smooth(0, 5, moon.el) * smooth(-3, -8, sun.el);
   return { kind: moon.el > 0 ? "moon" : "night", az: moon.az, el: moon.el, shadeEl: Math.max(moon.el, 3),
     color: [e * 0.72, e * 0.82, e], day, night, sky };
 }

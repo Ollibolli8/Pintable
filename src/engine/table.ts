@@ -242,7 +242,7 @@ uniform sampler2D tOpen; uniform sampler2D envMap; uniform sampler2D tLamp;
 uniform vec3 uCamG; uniform mat4 uGtoClip;
 uniform vec3 uLight; uniform vec3 uLightColor; uniform vec2 uSunDir; uniform float uTan; uniform float uEnv; uniform float uPix;
 uniform float uWell; uniform float uFloor; uniform float uTop; uniform float uLit; uniform float uSun; uniform float uSwell;
-uniform vec3 uFill; uniform vec3 uFillColor; uniform float uNight; uniform vec3 uSky; uniform vec3 uGround; uniform vec3 uDome; uniform vec3 uGlow;
+uniform vec3 uFill; uniform vec3 uFillColor; uniform float uNight; uniform float uShoulder; uniform vec3 uSky; uniform vec3 uGround; uniform vec3 uDome; uniform vec3 uGlow;
 uniform vec3 uRimAway; uniform vec3 uRimSun; uniform vec3 uAura;
 uniform float uRiseT; uniform float uSink; uniform sampler2D studioMap; uniform float uRoom;
 uniform vec2 uSpin; uniform float uWind; uniform vec2 uWindDir; uniform float uWindT; uniform float uCloud; uniform vec2 uCloudAt; uniform float uWet;
@@ -403,10 +403,11 @@ vec3 steel(vec3 n, vec3 V, vec3 f0, float rough, float lit, vec3 envC, float bro
   vec3 sun = mix(brdf(n, V, uLight, f0, a2, NoV), brdf(n, V, uLight, f0, 0.16, NoV), broad)
            + f0 * (broad * 0.2 * max(dot(n, uLight), 0.0));
   vec3 direct = sun * uLightColor * lit * uSun;
-  // The satin's sheen toward a low sun is some ten times a lit face: a film's shoulder rolls it off above 3, so the
-  // flat tops hold a bright grey with their grain in it instead of one white sheet (the harbour's glints keep theirs).
-  float L = dot(direct, vec3(0.2126, 0.7152, 0.0722)), over = max(L - 3.0, 0.0);
-  direct *= mix(1.0, (3.0 + over / (1.0 + over / 3.0)) / max(L, 1e-4), clamp(broad * 2.4, 0.0, 1.0));
+  // The satin's sheen toward a low sun is some ten times a lit face: a film's shoulder rolls it off above uShoulder (3
+  // by day), so the flat tops hold a bright grey with their grain in it instead of one white sheet (the harbour's
+  // glints keep theirs). After dark it rolls off far lower (0.3), as the moon's sheen would otherwise paint them white.
+  float L = dot(direct, vec3(0.2126, 0.7152, 0.0722)), over = max(L - uShoulder, 0.0);
+  direct *= mix(1.0, (uShoulder + over / (1.0 + over / uShoulder)) / max(L, 1e-4), clamp(broad * 2.4, 0.0, 1.0));
   if (uNight > 0.01) direct += brdf(n, V, uFill, f0, mix(a2, 0.16, broad), NoV) * uFillColor * uSun;
   vec2 ab = envBRDF(rough, NoV);
   return min(direct, vec3(48.0)) + envC * (f0 * ab.x + ab.y);
@@ -1058,7 +1059,7 @@ export function createPinTable(o: {
   const maxMip = Math.log2(envH) - 2;
   const u = {
     tMax: { value: maxRT.texture }, tOpen: { value: openRT.texture }, tRest: { value: restTex }, tShadow: { value: shA.texture }, tSim: { value: simA.texture }, tLamp: { value: lampTex }, envMap: { value: roomEnv.texture }, studioMap: { value: studioEnv.texture },
-    uFill: { value: new THREE.Vector3(0, 1, 0) }, uFillColor: { value: new THREE.Vector3() }, uNight: { value: 0 }, uSky: { value: new THREE.Vector3(1, 1, 1) }, uGround: { value: new THREE.Vector3() }, uDome: { value: new THREE.Vector3() }, uGlow: { value: new THREE.Vector3() },
+    uFill: { value: new THREE.Vector3(0, 1, 0) }, uFillColor: { value: new THREE.Vector3() }, uNight: { value: 0 }, uShoulder: { value: 3 }, uSky: { value: new THREE.Vector3(1, 1, 1) }, uGround: { value: new THREE.Vector3() }, uDome: { value: new THREE.Vector3() }, uGlow: { value: new THREE.Vector3() },
     uRimAway: { value: new THREE.Vector3() }, uRimSun: { value: new THREE.Vector3() }, uAura: { value: new THREE.Vector3() },
     uCamG: { value: new THREE.Vector3() }, uGtoClip: { value: new THREE.Matrix4() },
     uLight: { value: new THREE.Vector3(0, 1, 0) }, uLightColor: { value: new THREE.Vector3(10, 10, 10) }, uSunDir: { value: new THREE.Vector2(0, 1) }, uTan: { value: 1 }, uEnv: { value: 4.5 },
@@ -1145,6 +1146,7 @@ export function createPinTable(o: {
       const haze = n * (1 + 1.2 * cl);
       u.uDome.value.addScaledVector(CITY_SKY, haze); u.uRimAway.value.addScaledVector(CITY_SKY, haze); u.uRimSun.value.addScaledVector(CITY_SKY, haze);
       u.uNight.value = n;
+      u.uShoulder.value = 3 - 2.7 * n;   // the satin's sheen held to a dim grey after dark (Oliver, 20 October)
       // The wind blows towards its bearing + 180°: in the grid (x east, z south), turned with the table below.
       const to = THREE.MathUtils.degToRad(wx.from + 180 - GRID_NORTH);
       windDir.set(Math.sin(to), -Math.cos(to));
