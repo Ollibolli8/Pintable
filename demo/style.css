@@ -51,7 +51,7 @@ body { font: 500 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; col
 .dial-value { font: 500 13px/1 ui-monospace, "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
 .dial-note { padding: 3px 6px 2px; border-radius: 3px; background: var(--ink); color: #030304; font: 400 9px/1.2 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
 .dial-note[hidden] { display: none; }
-.dial-track { position: relative; height: 34px; overflow: hidden; cursor: ew-resize; touch-action: none; outline: none; border-radius: 3px;
+.dial-track { position: relative; height: 34px; overflow: hidden; cursor: ew-resize; touch-action: none; -webkit-user-select: none; user-select: none; outline: none; border-radius: 3px;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
 .dial-track:focus-visible { -webkit-mask-image: none; mask-image: none; box-shadow: inset 0 0 0 2px var(--ink); }
 .dial-scale { position: absolute; left: 50%; top: 0; bottom: 0; transition: transform .12s cubic-bezier(.2, .7, .2, 1); }
