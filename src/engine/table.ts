@@ -745,6 +745,8 @@ export function createPinTable(o: {
   const heights = new Float32Array(NT * NT);               // for the pointer: the city as it stands (no press)
   let tower = { col: 200.5, row: 213.5, h: 37.4 };         // replaced by the data's own tallest pin (units)
   let loaded = false, failed = false, alive = true;
+  // (settles once the GPU passes' shaders are ready, below: the table counts as loaded only then)
+  let passesIn: Promise<unknown> = Promise.resolve();
   // The arrival's clock (seconds of the rise, which runs slowed: SLOW real seconds to one), -1 until it starts; rush()
   // speeds it up when the visitor scrolls before it is over.
   let introT = -1, introSpeed = 1;
@@ -895,6 +897,7 @@ export function createPinTable(o: {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, a, NT, b - a, gl.RGBA, gl.FLOAT, rest.subarray(a * NT * 4, b * NT * 4));
     }, 64);
     // All of it at once, when it is all there (the frame reads none of it before).
+    await passesIn;
     if (!alive) return;
     tower = peak;
     order = sorted;
@@ -1001,13 +1004,18 @@ export function createPinTable(o: {
   const run = (mat: THREE.Material, rt: RT) => { quad.material = mat; renderer.setRenderTarget(rt); renderer.render(passScene, passCam); };
   // Every pass compiles now, in the background, as drawn into a target: not in the city's first frame (on a first
   // visit no shader is cached), nor the water's step and reset at the first boat or touch (a stalled arrival frame).
+  // The table is loaded (and the passes first run) only once they are ready: run while one still compiled, a pass
+  // waited for it, and the frame with it (on a cold Safari 1.2 s of the city's first frame, 2.3–2.7 s with a studio's
+  // table too, Simulator, 20 October). A compile that never reports in is given 4 s.
+  const warming: Promise<unknown>[] = [];
   for (const m of [composeMat, reduceMat, combineMat, openMat, shadowMat, simMat, zeroMat]) {
     const was = renderer.getRenderTarget();
     quad.material = m;
     renderer.setRenderTarget(simB);
-    warmUp(renderer, passScene, passCam);
+    warming.push(warmUp(renderer, passScene, passCam));
     renderer.setRenderTarget(was);
   }
+  passesIn = Promise.race([Promise.all(warming), new Promise(r => setTimeout(r, 4000))]);
 
   // ------------------------------------------------------------------------------------------ the room the steel sees
   // As in the look frame: a dark room, a long soft box low beyond the table to the north-west and a dim one overhead.
