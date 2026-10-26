@@ -397,7 +397,7 @@ export function createStage(o: StageOptions) {
     else if (hover && fine && !hands.size) over = table.pointer(toNdc(hover.x, hover.y, frameNdc), camera, "hover");
     else table.pointer(null, camera, null);
     if (ready && (still || !arriving)) setLift(over && !press ? table.under : null);
-    canvas.style.cursor = hands.size ? (press ? "grabbing" : "move") : over ? "pointer" : "grab";
+    canvas.style.cursor = hands.size ? (press ? "grabbing" : "move") : over ? "var(--o-link, pointer)" : "grab";
     const moving = table.update({ now, dt, camera, sink: 0, lit: 1, room: 0.35, still, height, hours, blur: lens.blur });
     // the sun (or the moon) on the ring, from where the table has it
     const l = table.light;
