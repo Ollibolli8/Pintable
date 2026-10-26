@@ -239,7 +239,7 @@ const TRACE_FRAG = /* glsl */ `
 #include <cube_uv_reflection_fragment>
 uniform highp sampler2D tMax; uniform highp sampler2D tRest; uniform highp sampler2D tShadow; uniform highp sampler2D tSim;
 uniform sampler2D tOpen; uniform sampler2D envMap; uniform sampler2D tLamp;
-uniform vec3 uCamG; uniform mat4 uGtoClip;
+uniform vec3 uCamG; uniform mat4 uGtoClip; uniform vec2 uBlur;
 uniform vec3 uLight; uniform vec3 uLightColor; uniform vec2 uSunDir; uniform float uTan; uniform float uEnv; uniform float uPix;
 uniform float uWell; uniform float uFloor; uniform float uTop; uniform float uLit; uniform float uSun; uniform float uSwell;
 uniform vec3 uFill; uniform vec3 uFillColor; uniform float uNight; uniform float uShoulder; uniform vec3 uSky; uniform vec3 uGround; uniform vec3 uDome; uniform vec3 uGlow;
@@ -438,11 +438,21 @@ vec3 glow(ivec2 c, vec3 P, int face, float h, float fp, float many, float lamp, 
   }
   if (h < 2.5 || P.y < 1.1 || P.y > h - 0.7 || lamp < -0.5) return vec3(0.0);   // (a landmark is floodlit instead)
   float fl = floor(P.y / 1.2), v = fract(P.y / 1.2);
-  float k = hash3(c, int(fl) * 4 + face);
-  if (k > 0.24 * uNight) return vec3(0.0);
-  float band = mix(smoothstep(0.24, 0.32, v) * (1.0 - smoothstep(0.68, 0.76, v)), 0.44, clamp(fp * 1.5 - 0.4, 0.0, 1.0));
-  vec3 tone = k < 0.05 * uNight ? vec3(0.62, 0.8, 1.0) : WINDOW;     // a few lit cooler, by screens or LEDs
-  return tone * (band * (1.6 + 5.0 * hash3(c, int(fl) * 4 + face + 2)));
+  float k = hash3(c, int(fl) * 4 + face), on = 0.24 * uNight;
+  // Further off, where a window is a pixel or less across, which pixel lands on a lit one is chance and the facades
+  // speckle, so there they hold what their windows give on average, more in some blocks than in others (a noise some
+  // ten pins across and five floors up, smooth from one pixel to the next).
+  float far = smoothstep(0.25, 0.75, fp);
+  vec3 one = vec3(0.0);
+  if (far < 1.0 && k <= on) {
+    float band = smoothstep(0.24, 0.32, v) * (1.0 - smoothstep(0.68, 0.76, v));
+    vec3 tone = k < 0.05 * uNight ? vec3(0.62, 0.8, 1.0) : WINDOW;   // a few lit cooler, by screens or LEDs
+    one = tone * (band * (1.6 + 5.0 * hash3(c, int(fl) * 4 + face + 2)));
+  }
+  if (far <= 0.0) return one;
+  float busy = vnoise(mid(c) * RES / 10.0 + P.y / 6.0);
+  vec3 avg = mix(WINDOW, vec3(0.62, 0.8, 1.0), 0.21) * (on * 0.44 * 4.1 * (0.25 + 2.25 * busy * busy));
+  return mix(one, avg, far);
 }
 
 // A boat's lights after dark: its cabin's windows along its sides and its glass roof lit from inside, and its running
@@ -539,7 +549,7 @@ void main() {
     vec3 n = face == 0 ? vec3(0.0, 1.0, 0.0) : face == 1 ? vec3(-sgn.x, 0.0, 0.0) : vec3(0.0, 0.0, -sgn.y);
     float fp = dist * uPix / max(abs(dot(n, V)), 0.2) * RES; // pins a pixel spans here
     float many = smoothstep(0.4, 1.6, fp);                   // past ~1 pin a pixel, the pixel holds their average
-    float gap, ao = 1.0, lath = 0.0;
+    float gap, ao = 1.0, lath = 0.0, even = 0.0, wall = 1.0;
     vec3 lathT = vec3(1.0, 0.0, 0.0);
     if (kind < 0.5) {
       // The pocket's floor and the pins' feet: near black.
@@ -603,6 +613,14 @@ void main() {
         ivec2 front = clamp(c - ivec2(face == 1 ? int(sgn.x) : 0, face == 2 ? int(sgn.y) : 0), ivec2(0), ivec2(NT - 1));
         float ground = texelFetch(tMax, front, 0).r;
         ao = 0.28 + 0.72 * (1.0 - exp(-max(P.y - ground, 0.0) / 4.5));
+        // A step in a roof a pixel or less tall (a pitched roof's pins, seen from further off) is most of the pixel's
+        // roof, so it takes the roof's light (up, the roof's sky, the gaps between heads); lit as a wall, it speckles
+        // the roofs, dark against lit heads (most of all after dark). A wall less than a floor tall has no windows.
+        even = 1.0 - smoothstep(0.5, 1.5, (h - ground) * RES / fp);
+        n = normalize(mix(n, vec3(0.0, 1.0, 0.0), even));
+        ao = mix(ao, texelFetch(tOpen, c, 0).r, even);
+        gap = mix(gap, (1.0 - PI * RAD * RAD) * (0.45 + 0.55 * clamp(V.y * 1.6, 0.0, 1.0)), even);
+        wall = (1.0 - even) * smoothstep(1.2, 2.4, h - ground);
       }
       float rough = mix(mix(0.22, 0.32, rn.x), mix(0.035, 0.08, rn.x), wm);
       rough = mix(rough, mix(0.3, 0.09, wm), many);
@@ -622,7 +640,7 @@ void main() {
       // dark it takes the lamps as bright steel does. (fl: what a pin returns of the lamps' light)
       vec3 fl = f0;
       f0 = mix(f0, vec3(0.11, 0.15, 0.19), wm * (1.0 - uNight));
-      float lit = sunSeen(c, P, fp) * cloudShade(P);
+      float lit = sunSeen(c, vec3(P.x, mix(P.y, h, even), P.z), fp) * cloudShade(P);
       vec3 R = reflect(-V, n);
       vec3 envC = env(R, rough);
 #ifdef REFLECT
@@ -679,8 +697,13 @@ void main() {
         vec2 at = face == 0 ? P.xz : P.xz - vec2(face == 1 ? sgn.x : 0.0, face == 2 ? sgn.y : 0.0) * 0.7;
         float pool = texture2D(tLamp, at / 512.0).r * exp(-max(P.y, 0.0) / 2.2) * mix(1.0, 0.25, wm);
         col += fl * LAMP * (pool * 2.2 * uNight * m) * ao;
+        // (where the lens will blur it, its blur averages the windows itself and they glitter through it as discs of
+        // light, as lit windows do through a lens: there they stay one by one however small; uBlur: the lens's focus,
+        // view depth, and its blur at infinity, px, as lens.ts reckons them)
+        float zv = (uGtoClip * vec4(P, 1.0)).w, cv = 1.0 - uBlur.x / max(zv, 1e-4);
+        float sharp = 1.0 - smoothstep(1.5, 4.0, cv > 0.0 ? 0.6 * uBlur.y * cv : min(-uBlur.y * cv, 1.3 * uBlur.y));
         if (boat) col += boatGlow(bI, P, face, h, many) * (uNight * m);
-        else col += glow(c, P, face, h, fp, many, rest.a, mt) * m;
+        else col += glow(c, P, face, h, fp * sharp, many, rest.a, mt) * (m * wall);
         // A landmark's floodlights on its walls (the patina takes them green).
         if (rest.a < -0.5) col += (mt == 1 ? vec3(0.16, 0.36, 0.28) : f0) * FLOOD * (flood(-rest.a, P, face, h, many) * 1.5 * uNight * m) * mix(1.0, ao, 0.5);
         // The water round a boat, lit by its cabin.
@@ -1069,7 +1092,7 @@ export function createPinTable(o: {
     tMax: { value: maxRT.texture }, tOpen: { value: openRT.texture }, tRest: { value: restTex }, tShadow: { value: shA.texture }, tSim: { value: simA.texture }, tLamp: { value: lampTex }, envMap: { value: roomEnv.texture }, studioMap: { value: studioEnv.texture },
     uFill: { value: new THREE.Vector3(0, 1, 0) }, uFillColor: { value: new THREE.Vector3() }, uNight: { value: 0 }, uShoulder: { value: 3 }, uSky: { value: new THREE.Vector3(1, 1, 1) }, uGround: { value: new THREE.Vector3() }, uDome: { value: new THREE.Vector3() }, uGlow: { value: new THREE.Vector3() },
     uRimAway: { value: new THREE.Vector3() }, uRimSun: { value: new THREE.Vector3() }, uAura: { value: new THREE.Vector3() },
-    uCamG: { value: new THREE.Vector3() }, uGtoClip: { value: new THREE.Matrix4() },
+    uCamG: { value: new THREE.Vector3() }, uGtoClip: { value: new THREE.Matrix4() }, uBlur: { value: new THREE.Vector2(1, 0) },
     uLight: { value: new THREE.Vector3(0, 1, 0) }, uLightColor: { value: new THREE.Vector3(10, 10, 10) }, uSunDir: { value: new THREE.Vector2(0, 1) }, uTan: { value: 1 }, uEnv: { value: 4.5 },
     uPix: { value: 0.001 }, uWell: { value: WELL }, uFloor: { value: FLOOR }, uTop: { value: TOP }, uLit: { value: 1 }, uSun: { value: 1 }, uSwell: { value: 0 }, uPitch: { value: PITCH },
     uRiseT: { value: 0 }, uSink: { value: 0 }, uRoom: { value: 0 },
@@ -1412,7 +1435,7 @@ export function createPinTable(o: {
      * `lit` the studio's lights coming up (the room's reflections), `room` how bright the studio stands. Returns
      * whether the pins are still moving.
      */
-    update(v: { now: number; dt: number; camera: THREE.PerspectiveCamera; sink: number; lit: number; room: number; still: boolean; height: number; hours: number }) {
+    update(v: { now: number; dt: number; camera: THREE.PerspectiveCamera; sink: number; lit: number; room: number; still: boolean; height: number; hours: number; blur?: readonly [number, number] }) {
       placeLight(v.hours);
       sinkNow = v.sink;
       const moving = step(v.now, v.dt, v.still);
@@ -1425,6 +1448,7 @@ export function createPinTable(o: {
       u.uCamG.value.set(camL.x / PITCH + N / 2, camL.y / PITCH, camL.z / PITCH + N / 2);
       u.uGtoClip.value.copy(v.camera.projectionMatrix).multiply(v.camera.matrixWorldInverse).multiply(mesh.matrixWorld).multiply(gToL);
       u.uPix.value = 2 * Math.tan(THREE.MathUtils.degToRad(v.camera.fov) / 2) / Math.max(1, v.height) / (v.camera.zoom || 1);
+      (u.uBlur.value as THREE.Vector2).set(v.blur?.[0] ?? 1, v.blur?.[1] ?? 0);
       u.uEnv.value = v.lit;
       // The sun goes down on the model as its pins sink into the plinth; the harbour's swell runs while time does.
       u.uSun.value = 1 - THREE.MathUtils.smoothstep(v.sink, 0.25, 0.75);

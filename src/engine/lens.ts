@@ -215,6 +215,9 @@ export function createMacroDof(renderer: THREE.WebGLRenderer, phone: boolean) {
   const v = new THREE.Vector3();
 
   return {
+    /** The blur the lens last drew with: its focus (view depth, world) and its blur at infinity (drawn px), for the
+     *  pin table, which keeps its windows one by one where the lens blurs them anyway (table.ts, glow()). */
+    get blur() { return [cocU.uFocus.value, cocU.uCoc.value] as const; },
     /** The screen's size (device pixels) and the share of it the scene is drawn at (1, or 0.75 on a 2× screen). */
     setSize(width: number, height: number, scale = 1) {
       sw = Math.max(1, Math.round(width * scale));

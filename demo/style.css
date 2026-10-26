@@ -30,9 +30,12 @@ body { font: 500 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; col
 /* a landmark's name, pinned over its roof */
 .ps-label { position: absolute; z-index: 2; left: 0; top: 0; pointer-events: none; will-change: transform; }
 .ps-label[hidden] { display: none; }
-.ps-label b, .ps-label span { position: absolute; left: 0; white-space: nowrap; translate: -50% 0; text-shadow: 0 1px 10px #030304, 0 0 2px #030304; }
-.ps-label b { bottom: 20px; font-size: 15px; font-weight: 650; line-height: 1; }
-.ps-label span { bottom: 4px; font: var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--dim); }
+.ps-label b, .ps-label span { position: absolute; left: 0; white-space: nowrap; translate: -50% 0; text-shadow: 0 0 2px #030304e6, 0 0 6px #030304cc, 0 0 16px #03030499; }
+.ps-label b { bottom: 20px; z-index: 1; font-size: 15px; font-weight: 650; line-height: 1; }
+.ps-label span { bottom: 4px; font: var(--mono); letter-spacing: .06em; text-transform: uppercase; color: rgb(231 230 226 / .88); }
+/* (and the room's dark pooled behind both lines, so the fact under the name reads over the brightest roofs; the name sits over it) */
+.ps-label span::before { content: ""; position: absolute; inset: -28px -44px -16px; z-index: -1;
+  background: radial-gradient(closest-side, rgb(3 3 4 / .72), rgb(3 3 4 / .4) 55%, rgb(3 3 4 / 0)); }
 
 .ps-head, .ps-dials, .ps-foot, .ps-read { position: absolute; z-index: 3; margin: 0; }
 .ps-head { left: var(--pad); top: max(40px, 9svh); max-width: min(380px, 30vw); }
