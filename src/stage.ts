@@ -57,7 +57,7 @@ export function createStage(o: StageOptions) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setClearColor(0x030304, 1);
 
-  let alive = true, raf = 0, still = o.still, ready = false, last = 0, drawnAt = 0, clock = 0;
+  let alive = true, raf = 0, still = o.still, ready = false, last = 0, drawnAt = 0, clock = 0, nextRatio = 0;
   const invalidate = () => { if (!raf && alive) raf = requestAnimationFrame(frame); };
   const fail = (e?: unknown) => { if (!alive) return; alive = false; cancelAnimationFrame(raf); o.onFail(e); };
 
@@ -427,6 +427,9 @@ export function createStage(o: StageOptions) {
     const dt = last ? Math.min(0.05, (now - drawnAt) / 1000) : 1 / 60;
     last = last && gap < 1000 / 30 ? last + 1000 / 60 : now;
     drawnAt = now;
+    // a new pixel ratio is set here, before the frame is drawn: it clears the canvas, and set after a draw (by the page's
+    // frame guard, from onFrame) that frame showed blank
+    if (nextRatio) { renderer.setPixelRatio(nextRatio); nextRatio = 0; resize(); }
     if (!still) clock += dt;
     const moving = update(dt, now);
     if (ready) lens.render(scene, camera, focus, lensAmount(at.dist), clock);
@@ -502,7 +505,7 @@ export function createStage(o: StageOptions) {
       return true;
     },
     setStill(s: boolean) { still = s; if (s) hands.clear(); invalidate(); },
-    setPixelRatio(dpr: number) { renderer.setPixelRatio(dpr); resize(); },
+    setPixelRatio(dpr: number) { nextRatio = dpr; invalidate(); },
     /** The type moved (its fonts came in): fit the table to the frame again. */
     refit() { resize(); },
     dispose() {
