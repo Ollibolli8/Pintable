@@ -152,15 +152,18 @@ void main() {
   gl_FragColor = vec4(1.0 - 0.55 * occ / 8.0);
 }`;
 // The height above which a pin sees the light: the highest of every pin towards the light, less the light's climb to
-// it. Each pass doubles how far it looks (1, 2, 4 ... 1024 texels).
+// it. Each pass doubles how far it looks (1, 2, 4 ... 1024 texels), and reads there between the four texels round
+// the point (its targets filter linearly): rounded to the nearest one, every shadow moved a texel at once whenever the
+// sun's bearing crossed one of a few angles (the near steps' rounding flipping), so dragging the hour made whole
+// facades and roofs jump.
 const SHADOW = /* glsl */ `
 uniform highp sampler2D tSrc; uniform vec2 uDir; uniform float uTan; uniform float uStep; uniform int uInit;
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
-  ivec2 q = ivec2(floor(vec2(c) + 0.5 + uDir * uStep));
-  bool inside = all(greaterThanEqual(q, ivec2(0))) && all(lessThan(q, ivec2(NT)));
-  // (the first pass reads the heights without the boats, the rest what it made; uStep is in texels)
-  vec4 src = inside ? texelFetch(tSrc, q, 0) : vec4(0.0);
+  vec2 p = vec2(c) + 0.5 + uDir * uStep;               // (in texels: uStep is in texels)
+  bool inside = all(greaterThanEqual(p, vec2(0.0))) && all(lessThan(p, vec2(NT)));
+  // (the first pass reads the heights without the boats, the rest what it made)
+  vec4 src = texture(tSrc, p / float(NT));
   float far = inside ? (uInit == 1 ? src.b : src.r) - uTan * uStep / RES : -1e4;
   gl_FragColor = vec4(uInit == 1 ? far : max(texelFetch(tSrc, c, 0).r, far));
 }`;
@@ -1004,6 +1007,8 @@ export function createPinTable(o: {
     new THREE.ShaderMaterial({ vertexShader: PASS_VERT, fragmentShader: frag, uniforms, defines: grid, depthTest: false, depthWrite: false });
   const simA = target(NT), simB = target(NT), hRT = target(NT), r4 = target(NT / 4), r16 = target(NT / 16), r64 = target(NT / 64);
   const maxRT = target(NT), shA = target(NT), shB = target(NT);
+  // (the shadow sweep reads its source between texels; every other read of these is a texelFetch, which doesn't filter)
+  for (const t of [hRT, shA, shB]) t.texture.minFilter = t.texture.magFilter = THREE.LinearFilter;
   // (the open sky a pin sees, 0 to 1: a byte a pin is enough)
   const openRT = new THREE.WebGLRenderTarget(NT, NT, {
     type: THREE.UnsignedByteType, format: THREE.RedFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
