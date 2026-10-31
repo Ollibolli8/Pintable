@@ -61,6 +61,8 @@ stage.choose(0);                                          // a landmark stands u
 
 `npm install`, then `npm run dev` builds the demo into `docs/` and serves it. It needs WebGL 2 with float render
 targets; without them `createStage` throws and the demo shows its still.
+It runs on three.js r180 to r186. r187 changed how three stores reflections, which the table's shader reads, so it
+doesn't run there yet.
 
 ## The data
 
