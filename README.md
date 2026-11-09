@@ -59,6 +59,31 @@ stage.setSky("rain");                                     // or null for the for
 stage.choose(0);                                          // a landmark stands up and the camera goes to it
 ```
 
+`look({ b, el, dist, place | point, pace })` sends the camera to a view (its bearing and elevation, how far as a share
+of the whole table's distance, a landmark or a point to look at, and how quickly it eases there); `stand(i)` stands a
+landmark up where the camera is, the lens holding the whole of it.
+
+### A window in a page
+
+Give `page` and the canvas lies over a page, the table seen through a window in it, like a card on a page (the
+portfolio's Maquettes carousel uses it). `page.source` is a picture of the page the canvas's size (a canvas or a decoded image), `page.frame` the
+window as `[left, top, right, bottom]` shares of the canvas from its top left, `page.radius` its corners (CSS px).
+Round the window the page shows as it stands; but whatever stands on the part of the city the window shows, and is
+sharp in the lens, is drawn whole past the window's edge. Taken in close and low, a tower in focus rises out of the top
+of the frame over the page while the blurred roofs beyond stay inside it (the lens's compose pass finds, for each
+pixel past the window, the point on the table under it).
+
+```ts
+const stage = createStage({
+  canvas: band, city, marks, phone, pixelRatio, still: false, at: new Date(), region: () => tileInNdc,
+  page: { source: pageCanvas, frame: [0.27, 0.13, 0.73, 0.95], radius: 4 },
+  hands: false, risen: true,                               // the page keeps the pointer (stage.hover(x, y)); the city stands at once
+  onReady() {}, onFail() {}, onNews() {}, onLabel() {},
+});
+stage.stand(0);                                            // Christiansborg stands up
+stage.look({ b: 148, el: 18, dist: 0.15, point: [200.5, 213.5], pace: 1.6 });   // low over the palace square
+```
+
 `npm install`, then `npm run dev` builds the demo into `docs/` and serves it. It needs WebGL 2 with float render
 targets; without them `createStage` throws and the demo shows its still.
 It runs on three.js r180 to r186. r187 changed how three stores reflections, which the table's shader reads, so it

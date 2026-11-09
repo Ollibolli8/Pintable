@@ -18,6 +18,13 @@ import { warmUp } from "./warm";
  * five sizes, each half the last (a 13-tap filter down, a tent back up, each wider size weighing 0.7 of the one inside
  * it, as a lens's glare falls off), and added back before the tone curve, so a glint carries a soft halo and a lit
  * street a glow in the air over it, while a sheet of sun on the harbour only lifts the air round it a little.
+ *
+ * Over a page (`page`): the canvas lies over a page and the table is seen through a window in it (`frame`, a rounded
+ * box). Round the window the page shows, as it stands; but what stands on the part of the city the window shows is
+ * drawn whole, past the window's edge, if the lens has it sharp: the building in focus rises out of the window over
+ * the page, while the blurred roofs beyond stay in it. A pixel outside the window shows the table only where it is
+ * above the table's top, in focus, and the point under it, on the table, is inside the window. The lens's fall-off is
+ * the window's own then.
  */
 const VERT = /* glsl */ `varying vec2 vUv; void main() { vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const COC = /* glsl */ `
@@ -127,6 +134,17 @@ varying vec2 vUv;
 uniform sampler2D tColor; uniform sampler2D tDepth; uniform sampler2D tBlur; uniform vec2 uHalfTexel; uniform float uGrain; uniform float uTime;
 uniform float uShade; uniform float uAspect; uniform vec2 uSize; uniform sampler2D tBloom; uniform vec2 uBloomTexel; uniform float uBloom;
 ${COC}
+#ifdef PAGE
+// The window (in vUv: left, bottom, right, top), its corner (px), the screen (px), the page, and the camera, to find
+// where on the table a pixel stands.
+uniform vec4 uBox; uniform float uRadius; uniform vec2 uScreen; uniform sampler2D tPage;
+uniform mat4 uProjInv; uniform mat4 uCamWorld; uniform mat4 uViewProj; uniform float uTop;
+float windowSd(vec2 uv) {
+  vec2 c = (uBox.xy + uBox.zw) * 0.5 * uScreen, hb = (uBox.zw - uBox.xy) * 0.5 * uScreen;
+  vec2 q = abs(uv * uScreen - c) - hb + uRadius;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - uRadius;
+}
+#endif
 float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 // The sharp frame at this pixel: Catmull-Rom from the drawn frame's pixels (five bilinear reads), clamped to the four
 // nearest so a glint brighter than white leaves no dark ring. Where the frame is the screen's size it is exact.
@@ -155,8 +173,15 @@ void main() {
                         + texture2D(tBloom, vUv + vec2(-q.x, q.y)).rgb + texture2D(tBloom, vUv + vec2(q.x, q.y)).rgb);
   // The lens's own fall-off, and a graduated filter over the lower half, where the name stands: half of it before the
   // tone curve, as glass in front of the lens would, the rest after it, so the sun's glints there darken too.
-  float r = length((vUv - 0.5) * vec2(uAspect, 1.0)) / length(vec2(uAspect, 1.0) * 0.5);
-  float grad = smoothstep(0.66, 0.0, vUv.y);
+  #ifdef PAGE
+  vec2 sv = (vUv - uBox.xy) / (uBox.zw - uBox.xy);
+  float aspect = uAspect * (uBox.z - uBox.x) / (uBox.w - uBox.y);
+  #else
+  vec2 sv = vUv;
+  float aspect = uAspect;
+  #endif
+  float r = length((sv - 0.5) * vec2(aspect, 1.0)) / length(vec2(aspect, 1.0) * 0.5);
+  float grad = smoothstep(0.66, 0.0, sv.y);
   col *= mix(1.0, (1.0 - 0.38 * smoothstep(0.45, 1.0, r)) * (1.0 - 0.5 * grad), uShade);
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
@@ -164,6 +189,19 @@ void main() {
   gl_FragColor.rgb *= 1.0 - 0.45 * grad * uShade;
   // Film grain, finer than a pixel's worth of light, and enough to dither the dark gradients.
   gl_FragColor.rgb += (hash(gl_FragCoord.xy + fract(uTime) * 917.0) - 0.5) * uGrain;
+  #ifdef PAGE
+  float shown = clamp(0.5 - windowSd(vUv), 0.0, 1.0);
+  float d = texture2D(tDepth, vUv).r;
+  if (shown < 1.0 && d < 1.0) {
+    vec4 at = uProjInv * vec4(vUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    vec3 p = (uCamWorld * vec4(at.xyz / at.w, 1.0)).xyz;
+    vec4 foot = uViewProj * vec4(p.x, uTop, p.z, 1.0);
+    // (and only what the lens has sharp: the blurred roofs beyond stay in the window)
+    float sharp = 1.0 - smoothstep(0.045, 0.12, abs(coc(d)) / max(uCoc, 1.0));
+    if (p.y > uTop && foot.w > 0.0) shown = max(shown, sharp * clamp(0.5 - windowSd(foot.xy / foot.w * 0.5 + 0.5), 0.0, 1.0));
+  }
+  gl_FragColor.rgb = mix(texture2D(tPage, vUv).rgb, gl_FragColor.rgb, shown);
+  #endif
 }`;
 
 // The bloom: from what is brighter than this after the exposure (the sunlit roofs stay under it: a glint, a lamp, a
@@ -174,7 +212,15 @@ const BLOOM = (() => {
   return q !== null && Number.isFinite(Number(q)) ? Number(q) : 0.3;
 })() / GLARE_SUM;
 
-export function createMacroDof(renderer: THREE.WebGLRenderer, phone: boolean) {
+export type LensPage = {
+  /** The page under the canvas, the canvas's size (display colours, top row first). */
+  source: TexImageSource;
+  /** The window: [left, top, right, bottom] as shares of the canvas from its top left, and its corner radius (CSS px). */
+  frame: [number, number, number, number];
+  radius?: number;
+};
+
+export function createMacroDof(renderer: THREE.WebGLRenderer, phone: boolean, page?: LensPage) {
   const hdr = new THREE.WebGLRenderTarget(1, 1, {
     type: THREE.HalfFloatType, depthTexture: new THREE.DepthTexture(1, 1), samples: 0,
     minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false,
@@ -196,7 +242,19 @@ export function createMacroDof(renderer: THREE.WebGLRenderer, phone: boolean) {
     tColor: { value: hdr.texture }, tDepth: { value: hdr.depthTexture }, tBlur: { value: soft.texture }, uHalfTexel: { value: new THREE.Vector2() },
     uGrain: { value: 0 }, uTime: { value: 0 }, uShade: { value: 0 }, uAspect: { value: 1 }, uSize: { value: new THREE.Vector2(1, 1) }, ...cocU,
     tBloom: { value: glare[0].texture }, uBloomTexel: { value: new THREE.Vector2() }, uBloom: { value: 0 },
-  });
+  }, page ? { defines: { PAGE: "" } } : {});
+  const pageTex = page ? new THREE.Texture(page.source as HTMLCanvasElement) : null;
+  if (page && pageTex) {
+    pageTex.colorSpace = THREE.NoColorSpace;               // laid in as it stands, after the tone curve
+    pageTex.minFilter = pageTex.magFilter = THREE.LinearFilter;
+    pageTex.generateMipmaps = false;
+    pageTex.needsUpdate = true;
+    const [l, t, r, b] = page.frame;
+    Object.assign(composeMat.uniforms, {
+      tPage: { value: pageTex }, uBox: { value: new THREE.Vector4(l, 1 - b, r, 1 - t) }, uRadius: { value: 0 }, uScreen: { value: new THREE.Vector2(1, 1) },
+      uProjInv: { value: new THREE.Matrix4() }, uCamWorld: { value: new THREE.Matrix4() }, uViewProj: { value: new THREE.Matrix4() }, uTop: { value: 0 },
+    });
+  }
   const scene = new THREE.Scene(), cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   const tri = new THREE.BufferGeometry();
   tri.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
@@ -238,6 +296,10 @@ export function createMacroDof(renderer: THREE.WebGLRenderer, phone: boolean) {
       (gatherMat.uniforms.uTexel.value as THREE.Vector2).set(1 / Math.ceil(sw / 2), 1 / Math.ceil(sh / 2));
       (composeMat.uniforms.uHalfTexel.value as THREE.Vector2).set(1 / Math.ceil(sw / 2), 1 / Math.ceil(sh / 2));
       (composeMat.uniforms.uSize.value as THREE.Vector2).set(sw, sh);
+      if (page) {
+        (composeMat.uniforms.uScreen.value as THREE.Vector2).set(w, h);
+        composeMat.uniforms.uRadius.value = (page.radius ?? 0) * renderer.getPixelRatio();
+      }
     },
     /**
      * The frame through the lens: `focus` the point in sharp focus (world), `amount` 0 (a pinhole) to 1 (the
@@ -258,6 +320,11 @@ export function createMacroDof(renderer: THREE.WebGLRenderer, phone: boolean) {
       composeMat.uniforms.uShade.value = Math.min(1, amount * 1.2);
       composeMat.uniforms.uAspect.value = w / h;
       composeMat.uniforms.uBloom.value = BLOOM * Math.min(1, amount * 8);
+      if (page) {
+        (composeMat.uniforms.uProjInv.value as THREE.Matrix4).copy(camera.projectionMatrixInverse);
+        (composeMat.uniforms.uCamWorld.value as THREE.Matrix4).copy(camera.matrixWorld);
+        (composeMat.uniforms.uViewProj.value as THREE.Matrix4).multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      }
       run(downMat, down);
       run(gatherMat, blur);
       run(tentMat, soft);
@@ -295,6 +362,7 @@ export function createMacroDof(renderer: THREE.WebGLRenderer, phone: boolean) {
     dispose() {
       hdr.depthTexture?.dispose(); hdr.dispose(); down.dispose(); blur.dispose(); soft.dispose(); glare.forEach(rt => rt.dispose());
       downMat.dispose(); gatherMat.dispose(); tentMat.dispose(); brightMat.dispose(); shrinkMat.dispose(); growMat.dispose(); composeMat.dispose(); tri.dispose();
+      pageTex?.dispose();
     },
   };
 }

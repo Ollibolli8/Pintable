@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { createPinTable, GRID, RISE } from "./engine/table";
-import { createMacroDof } from "./engine/lens";
+import { createMacroDof, type LensPage } from "./engine/lens";
 import { warmUp } from "./engine/warm";
 import { PLACES } from "./engine/places";
 import type { Light } from "./engine/sky";
@@ -45,6 +45,14 @@ export type StageOptions = {
   region?: (w: number, h: number) => Region;
   /** Where the table first shows (its centre and width, CSS px), for the page's loading ring. */
   onFit?: (x: number, y: number, d: number) => void;
+  /** The canvas lies over a page and the table is seen through a window in it (engine/lens.ts): round the window the
+   *  page shows, and what stands on the part of the city in it rises whole past its edge. */
+  page?: LensPage;
+  /** false: the stage takes no pointer of its own; the page passes a resting mouse in with `hover`. */
+  hands?: boolean;
+  /** The city stands at once when the table is ready (a quick rise, the camera where it is), for a page that shows the
+   *  table only once it has. */
+  risen?: boolean;
 };
 export type Region = { x0: number; x1: number; y0: number; y1: number };
 
@@ -64,7 +72,7 @@ export function createStage(o: StageOptions) {
   const made = createPinTable({ renderer, top: 0, phone, at: o.at, city: o.city, marks: o.marks, invalidate, onFail: fail });
   if (!made) { renderer.dispose(); throw new Error("pintable: no float render targets"); }
   const table = made;
-  const lens = createMacroDof(renderer, phone);
+  const lens = createMacroDof(renderer, phone, o.page);
   const scene = new THREE.Scene();
   scene.add(table.mesh);
   const camera = new THREE.PerspectiveCamera(phone ? 30 : 24, 1, 0.02, 20);
@@ -167,8 +175,9 @@ export function createStage(o: StageOptions) {
   // The arrival: high over the plan as the city starts to rise, coming down to the view as the last pins settle.
   const ARRIVE = { el: 74, dist: 1.25 };
 
+  let pace = 7;                                            // how quickly the camera eases to where it is sent (1/s)
   function placeCamera(dt: number) {
-    const k = still ? 1 : 1 - Math.exp(-dt * 7);
+    const k = still ? 1 : 1 - Math.exp(-dt * pace);
     let db = want.b - at.b;
     db -= 360 * Math.round(db / 360);
     at.b += db * k;
@@ -177,7 +186,7 @@ export function createStage(o: StageOptions) {
     at.gx += (want.gx - at.gx) * k;
     at.gz += (want.gz - at.gz) * k;
     const moving = Math.abs(db) > 0.01 || Math.abs(want.el - at.el) > 0.01 || Math.abs(want.dist / at.dist - 1) > 0.0005 || Math.hypot(want.gx - at.gx, want.gz - at.gz) > 0.02;
-    if (!moving) Object.assign(at, want);
+    if (!moving) { Object.assign(at, want); pace = 7; }
     let { b, el, dist } = at;
     if (arriving && !handled) {
       const t = table.intro, p = t < 0 ? 0 : Math.min(1, t / (RISE - 0.4)), s = p * p * p * (p * (p * 6 - 15) + 10);
@@ -344,16 +353,19 @@ export function createStage(o: StageOptions) {
     if (held) e.preventDefault();
   }
   const touchMove = (e: TouchEvent) => { if ((held || e.touches.length > 1) && e.cancelable) e.preventDefault(); };
-  canvas.addEventListener("touchstart", touchStart, { passive: false });
-  canvas.addEventListener("touchmove", touchMove, { passive: false });
-  canvas.addEventListener("pointerdown", down);
-  canvas.addEventListener("pointermove", move);
-  canvas.addEventListener("pointerup", up);
-  canvas.addEventListener("pointercancel", up);
-  canvas.addEventListener("pointerleave", leave);
-  canvas.addEventListener("wheel", wheel, { passive: false });
-  canvas.addEventListener("dblclick", dblclick);
-  canvas.addEventListener("contextmenu", menu);
+  const handsOn = o.hands !== false;
+  if (handsOn) {
+    canvas.addEventListener("touchstart", touchStart, { passive: false });
+    canvas.addEventListener("touchmove", touchMove, { passive: false });
+    canvas.addEventListener("pointerdown", down);
+    canvas.addEventListener("pointermove", move);
+    canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("pointercancel", up);
+    canvas.addEventListener("pointerleave", leave);
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    canvas.addEventListener("dblclick", dblclick);
+    canvas.addEventListener("contextmenu", menu);
+  }
   const lost = (e: Event) => { e.preventDefault(); fail(new Error("WebGL context lost")); };
   canvas.addEventListener("webglcontextlost", lost);
 
@@ -386,7 +398,10 @@ export function createStage(o: StageOptions) {
       ready = true;
       o.onReady();
     }
-    if (ready && table.intro < 0) table.arrive();          // (with motion off the city stands at once)
+    if (ready && table.intro < 0) {                        // (with motion off the city stands at once)
+      table.arrive();
+      if (o.risen) { handled = true; table.rush(); }
+    }
     arriving = table.arriving && !still;
     const cam = placeCamera(dt);
     // the hand on the table
@@ -397,7 +412,7 @@ export function createStage(o: StageOptions) {
     else if (hover && fine && !hands.size) over = table.pointer(toNdc(hover.x, hover.y, frameNdc), camera, "hover");
     else table.pointer(null, camera, null);
     if (ready && (still || !arriving)) setLift(over && !press ? table.under : null);
-    canvas.style.cursor = hands.size ? (press ? "grabbing" : "move") : over ? "var(--o-link, pointer)" : "grab";
+    if (handsOn) canvas.style.cursor = hands.size ? (press ? "grabbing" : "move") : over ? "var(--o-link, pointer)" : "grab";
     const moving = table.update({ now, dt, camera, sink: 0, lit: 1, room: 0.35, still, height, hours, blur: lens.blur });
     // the sun (or the moon) on the ring, from where the table has it
     const l = table.light;
@@ -490,6 +505,31 @@ export function createStage(o: StageOptions) {
       setLift(null);
       invalidate();
     },
+    /**
+     * Sends the camera to a view: `b` its bearing and `el` its elevation (degrees), `dist` how far as a share of the
+     * whole table's distance (1: the whole table), `place` the landmark it looks at (its place in PLACES: its middle)
+     * or null for the table's middle, `point` a point it looks at instead ([x, z] in 512ths of the table, as PLACES
+     * gives them), and `pace` how quickly it eases there (1/s; 7 as the hands move it, 2 a slow move of a second or two).
+     */
+    look(v: { b?: number; el?: number; dist?: number; place?: number | null; point?: [number, number]; pace?: number }) {
+      touched();
+      if (v.b !== undefined) want.b = v.b;
+      if (v.el !== undefined) want.el = v.el;
+      if (v.dist !== undefined) want.dist = v.dist * wide;
+      if (v.place !== undefined) {
+        const m = v.place === null ? null : table.landmark(v.place);
+        want.gx = m ? m.x : centre; want.gz = m ? m.z : centre;
+      }
+      if (v.point) { want.gx = v.point[0] * PIN; want.gz = v.point[1] * PIN; }
+      pace = v.pace ?? 7;
+      clampView(want);
+      invalidate();
+    },
+    /** Stands landmark i up (its place in PLACES; null for none) where the camera is, the lens holding the whole of it. */
+    stand(i: number | null) { chosen = i; nudged = -1; setLift(null); invalidate(); },
+    /** A mouse resting at (x, y) on the canvas (CSS px), or gone (null): a fingertip held over the roofs. For a page
+     *  that keeps the pointer itself (`hands: false`). */
+    hover(x: number | null, y = 0) { hover = x === null ? null : { x, y }; fine = true; invalidate(); },
     /** The whole table again. */
     home() { touched(); chosen = null; nudged = -1; setLift(null); Object.assign(want, { b: want.b, el: 31, dist: wide, gx: centre, gz: centre }); invalidate(); },
     /** Arrow keys and +/-: turn, tilt, go in and out. Returns whether the key was used. */
@@ -512,7 +552,7 @@ export function createStage(o: StageOptions) {
       alive = false;
       cancelAnimationFrame(raf);
       ro.disconnect();
-      canvas.removeEventListener("touchstart", touchStart);
+      if (handsOn) canvas.removeEventListener("touchstart", touchStart);
       canvas.removeEventListener("touchmove", touchMove);
       canvas.removeEventListener("pointerdown", down);
       canvas.removeEventListener("pointermove", move);
