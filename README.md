@@ -66,12 +66,12 @@ landmark up where the camera is, the lens holding the whole of it.
 ### A window in a page
 
 Give `page` and the canvas lies over a page, the table seen through a window in it, like a card on a page (the
-portfolio's Maquettes carousel uses it). `page.source` is a picture of the page the canvas's size (a canvas or a decoded image), `page.frame` the
-window as `[left, top, right, bottom]` shares of the canvas from its top left, `page.radius` its corners (CSS px).
-Round the window the page shows as it stands; but whatever stands on the part of the city the window shows, and is
-sharp in the lens, is drawn whole past the window's edge. Taken in close and low, a tower in focus rises out of the top
-of the frame over the page while the blurred roofs beyond stay inside it (the lens's compose pass finds, for each
-pixel past the window, the point on the table under it).
+portfolio's Maquettes carousel uses it). `page.source` is a picture of the page the canvas's size (a canvas or a
+decoded image), `page.frame` the window as `[left, top, right, bottom]` shares of the canvas from its top left,
+`page.radius` its corners (CSS px). Round the window the page shows as it stands; but whatever stands on the part of
+the city the window shows, and is sharp in the lens, is drawn whole past the window's edge. Taken in close and low, a
+tower in focus rises out of the top of the frame over the page while the blurred roofs beyond stay inside it (the
+lens's compose pass finds, for each pixel past the window, the point on the table under it).
 
 ```ts
 const stage = createStage({
